@@ -1,4 +1,4 @@
-require('dotenv').config();
+require('dotenv').config({path: '.env.local'});
 const express = require('express');
 const cors = require('cors');
 const connectToMongo = require('./db');
@@ -7,7 +7,7 @@ const jwt = require('jsonwebtoken');
 const { Server } = require('socket.io');
 
 const app = express();
-const port = 5000;
+const port = 5001;
 
 // Connect to MongoDB
 connectToMongo();
@@ -75,6 +75,10 @@ io.on("connection", (socket) => {
     console.log("User disconnected:", socket.user.id);
   });
 });
+console.log("ENV TEST");
+console.log("Mongo URI:", process.env.MONGO_URI);
+console.log("JWT_SECRET:", process.env.JWT_SECRET);
+console.log("ENCRYPTION_SECRET:", process.env.ENCRYPTION_SECRET);
 
 // API Routes
 app.use('/api/auth', require('./routes/auth'));
