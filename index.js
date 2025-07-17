@@ -3,6 +3,7 @@ const express = require('express');
 const cors = require('cors');
 const connectToMongo = require('./db');
 const http = require('http');
+const jwt = require('jsonwebtoken');
 const { Server } = require('socket.io');
 
 const app = express();
@@ -18,6 +19,8 @@ app.use(express.json()); // To parse JSON bodies
 // HTTP server for Socket.IO
 const server = http.createServer(app);
 
+
+
 // Socket.IO setup
 const io = new Server(server, {
   cors: {
@@ -26,15 +29,29 @@ const io = new Server(server, {
     credentials: true,
   },
 });
+io.use((socket, next) => {
+  // Get token from client handshake auth data
+  const token = socket.handshake.auth.token;
+  if (!token) {
+    return next(new Error("Authentication error: Token required"));
+  }
+
+  try {
+    // Verify token with your secret key
+    const user = jwt.verify(token, process.env.JWT_SECRET);
+    // Attach user info to socket object for future use
+    socket.user = user;
+    next();
+  } catch (err) {
+    return next(new Error("Authentication error: Invalid token"));
+  }
+});
 
 // Socket.IO logic
 io.on("connection", (socket) => {
-  console.log("User connected:", socket.id);
+  console.log("User connected:", socket.user.id); // Authenticated user's ID
 
-  socket.on("setup", (userData) => {
-    socket.join(userData._id);
-    socket.emit("connected");
-  });
+  socket.join(socket.user.id); // Join room named with user ID for private messaging
 
   socket.on("join chat", (room) => {
     socket.join(room);
@@ -48,21 +65,21 @@ io.on("connection", (socket) => {
     if (!chat.users) return;
 
     chat.users.forEach((user) => {
-      if (user._id !== message.sender._id) {
+      if (user._id !== socket.user.id) {
         socket.to(user._id).emit("message received", message);
       }
     });
   });
 
   socket.on("disconnect", () => {
-    console.log("User disconnected:", socket.id);
+    console.log("User disconnected:", socket.user.id);
   });
 });
 
 // API Routes
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/chat', require('./routes/chat'));
-//app.use('/api/message', require('./routes/message')); // FIXED this path
+app.use('/api/message', require('./routes/message')); // FIXED this path
 
 // Start server
 server.listen(port, () => {

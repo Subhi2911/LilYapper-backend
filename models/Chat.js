@@ -18,6 +18,16 @@ const chatSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
     },
+    deletedFor: [{
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User'
+    }],
+    permissions: {
+      rename: { type: String, enum: ['admin', 'all'], default: 'admin' },
+      addUser: { type: String, enum: ['admin', 'all'], default: 'admin' },
+      removeUser: { type: String, enum: ['admin', 'all'], default: 'admin' }
+    }
+
   },
   { timestamps: true }
 );

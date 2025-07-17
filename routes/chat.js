@@ -5,52 +5,70 @@ const fetchuser = require('../middleware/fetchuser');
 const { body, validationResult } = require('express-validator');
 const router = express.Router();
 
-// Route 1: Access or create a one-on-one chat
-router.post('/', fetchuser, [
-    body('userId', 'userId must be a valid Mongo ID').notEmpty().isMongoId()
-], async (req, res) => {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+// Route 1: create one-to-one chat
+router.post('/', fetchuser,
+    [
+        body('userId', 'userId must be a valid Mongo ID').notEmpty().isMongoId()
+    ],
+    async (req, res) => {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
 
-    const currentUserId = req.user.id;
-    const receiverId = req.body.userId;
+        const currentUserId = req.user.id;
+        const receiverId = req.body.userId;
 
-    try {
-        const currentUser = await User.findById(currentUserId);
-        if (!currentUser.friends.includes(receiverId)) {
-            return res.status(403).json({ error: "You can only chat with approved users." });
+        if (currentUserId === receiverId) {
+            return res.status(400).json({ error: "You cannot start a chat with yourself." });
         }
 
-        let isChat = await Chat.findOne({
-            isGroupChat: false,
-            users: { $all: [currentUserId, receiverId] }
-        }).populate('users', '-password')
-            .populate('latestMessage');
+        try {
+            const currentUser = await User.findById(currentUserId);
+            if (!currentUser.friends.includes(receiverId)) {
+                return res.status(403).json({ error: "You can only chat with approved users." });
+            }
 
-        isChat = await User.populate(isChat, {
-            path: 'latestMessage.sender',
-            select: 'username avatar email'
-        });
+            // Check if chat already exists between these two users
+            let chat = await Chat.findOne({
+                isGroupChat: false,
+                users: { $all: [currentUserId, receiverId] },
+                deletedFor: { $ne: currentUserId }
+            })
+                .populate('users', '-password')
+                .populate('latestMessage');
 
-        if (isChat) return res.status(200).json(isChat);
+            if (chat) {
+                chat = await User.populate(chat, {
+                    path: 'latestMessage.sender',
+                    select: 'username avatar email'
+                });
+                return res.status(200).json(chat);
+            }
 
-        const newChat = await Chat.create({
-            chatName: 'sender',
-            isGroupChat: false,
-            users: [currentUserId, receiverId]
-        });
+            // Create new chat
+            const newChat = await Chat.create({
+                chatName: 'sender',
+                isGroupChat: false,
+                users: [currentUserId, receiverId],
+                deletedFor: []
+            });
 
-        const fullChat = await Chat.findById(newChat._id).populate('users', '-password');
-        res.status(200).json(fullChat);
-    } catch (error) {
-        res.status(500).json({ message: error.message });
+            const fullChat = await Chat.findById(newChat._id).populate('users', '-password');
+            res.status(201).json(fullChat);
+
+        } catch (error) {
+            console.error(error.message);
+            res.status(500).json({ message: 'Internal server error' });
+        }
     }
-});
+);
 
 // Route 2: Get all chats for logged in user
 router.get('/', fetchuser, async (req, res) => {
     try {
-        const chats = await Chat.find({ users: { $elemMatch: { $eq: req.user.id } } })
+        const chats = await Chat.find({
+            users: req.user.id,
+            deletedFor: { $ne: req.user.id }
+        })
             .populate('users', '-password')
             .populate('groupAdmin', '-password')
             .populate({
@@ -94,14 +112,15 @@ router.post('/group', fetchuser, [
             chatName,
             isGroupChat: true,
             users: [...userIds, currentUserId],
-            groupAdmin: currentUserId
+            groupAdmin: currentUserId,
+            deletedFor: []
         });
 
         const fullChat = await Chat.findById(group._id)
             .populate('users', '-password')
             .populate('groupAdmin', '-password');
 
-        res.status(200).json(fullChat);
+        res.status(201).json(fullChat);
     } catch (err) {
         res.status(500).json({ error: 'Internal Server Error' });
     }
@@ -120,8 +139,14 @@ router.put('/rename/:id', fetchuser, [
         const chat = await Chat.findById(req.params.id);
         if (!chat) return res.status(404).json({ error: "Group not found" });
 
-        if (req.user.id !== chat.groupAdmin.toString()) {
+        // Check permissions
+        if (chat.permissions.rename === 'admin' && req.user.id !== chat.groupAdmin.toString()) {
             return res.status(403).json({ error: 'Only admin can rename the group' });
+        }
+
+        // If permission is 'all', anyone in the group can rename (optional: check if user is in group)
+        if (chat.permissions.rename === 'all' && !chat.users.includes(req.user.id)) {
+            return res.status(403).json({ error: 'You are not a member of this group' });
         }
 
         chat.chatName = chatName;
@@ -154,8 +179,12 @@ router.put('/group-add/:id', fetchuser, [
             return res.status(404).json({ error: "Group not found" });
         }
 
-        if (req.user.id !== chat.groupAdmin.toString()) {
+        // Check permissions
+        if (chat.permissions.addUser === 'admin' && req.user.id !== chat.groupAdmin.toString()) {
             return res.status(403).json({ error: 'Only admin can add users' });
+        }
+        if (chat.permissions.addUser === 'all' && !chat.users.includes(req.user.id)) {
+            return res.status(403).json({ error: 'You are not a member of this group' });
         }
 
         const currentUser = await User.findById(req.user.id);
@@ -177,7 +206,7 @@ router.put('/group-add/:id', fetchuser, [
     }
 });
 
-// Route 6: Remove users from group
+// Route 6: Remove users from group (including admin leave logic)
 router.put('/group-remove/:id', fetchuser, [
     body('userIds').isArray({ min: 1 }).withMessage('Must provide userIds array')
         .custom(ids => ids.every(id => /^[a-f\d]{24}$/i.test(id)))
@@ -191,20 +220,126 @@ router.put('/group-remove/:id', fetchuser, [
         const chat = await Chat.findById(req.params.id);
         if (!chat) return res.status(404).json({ error: "Group not found" });
 
-        if (req.user.id !== chat.groupAdmin.toString()) {
+        // Check permissions
+        if (chat.permissions.removeUser === 'admin' && req.user.id !== chat.groupAdmin.toString()) {
             return res.status(403).json({ error: 'Only admin can remove users' });
         }
+        if (chat.permissions.removeUser === 'all' && !chat.users.includes(req.user.id)) {
+            return res.status(403).json({ error: 'You are not a member of this group' });
+        }
 
-        chat.users = chat.users.filter(
-            id => !userIds.includes(id.toString())
-        );
-        await chat.save();
+        // Remove users from chat.users
+        chat.users = chat.users.filter(id => !userIds.includes(id.toString()));
+
+        // Check if the admin is removed
+        const adminId = chat.groupAdmin.toString();
+        const removedAdmin = userIds.includes(adminId);
+
+        if (removedAdmin) {
+            // Admin left/removed — assign new admin randomly from remaining users
+            if (chat.users.length > 0) {
+                const randomIndex = Math.floor(Math.random() * chat.users.length);
+                chat.groupAdmin = chat.users[randomIndex];
+            } else {
+                // No users left — optional: delete the group or set admin to null
+                chat.groupAdmin = null;
+                // Optionally: await chat.remove();
+                // return res.json({ message: 'Group deleted as no users remain.' });
+            }
+        }
+
         await chat.save();
 
-        res.json({ message: 'Users removed successfully.' });
+        res.json({ message: 'Users removed successfully.', newAdmin: chat.groupAdmin });
+    } catch (error) {
+        console.error(error.message);
+        res.status(500).send("Internal server error");
+    }
+});
+
+
+
+// Route 7: Delete chat (soft delete for current user)
+router.delete('/deletechat/:chatId', fetchuser, async (req, res) => {
+    try {
+        const chatId = req.params.chatId;
+        const userId = req.user.id;
+
+        let chat = await Chat.findById(chatId);
+        if (!chat) {
+            return res.status(404).json({ error: 'Chat not found' });
+        }
+
+        if (!chat.users.includes(userId)) {
+            return res.status(403).json({ error: 'You are not part of this chat' });
+        }
+
+        if (!chat.deletedFor) chat.deletedFor = [];
+
+        if (!chat.deletedFor.includes(userId)) {
+            chat.deletedFor.push(userId);
+            await chat.save();
+        }
+
+        res.json({ message: 'Chat deleted for you' });
+    } catch (error) {
+        console.error(error.message);
+        res.status(500).send('Internal server error');
+    }
+});
+
+// Route 8: Get a specific chat
+router.get('/getchat/:chatId', fetchuser, async (req, res) => {
+    try {
+        const chatId = req.params.chatId;
+        const userId = req.user.id;
+
+        const chat = await Chat.findOne({
+            _id: chatId,
+            users: userId,
+            deletedFor: { $ne: userId }
+        })
+            .populate('users', '-password')
+            .populate('latestMessage');
+
+        if (!chat) {
+            return res.status(404).json({ error: 'Chat not found or deleted' });
+        }
+
+        res.json(chat);
+    } catch (error) {
+        console.error(error.message);
+        res.status(500).send('Internal server error');
+    }
+});
+
+//Route 8 Update permissions
+router.put('/group-permissions/:id', fetchuser, [
+    body('permissions.rename').optional().isIn(['admin', 'all']),
+    body('permissions.addUser').optional().isIn(['admin', 'all']),
+    body('permissions.removeUser').optional().isIn(['admin', 'all']),
+], async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+
+    const { permissions } = req.body;
+
+    try {
+        const chat = await Chat.findById(req.params.id);
+        if (!chat) return res.status(404).json({ error: "Group not found" });
+
+        if (req.user.id !== chat.groupAdmin.toString()) {
+            return res.status(403).json({ error: 'Only admin can update permissions' });
+        }
+
+        chat.permissions = { ...chat.permissions.toObject(), ...permissions };
+        await chat.save();
+
+        res.json({ message: 'Permissions updated', permissions: chat.permissions });
     } catch (error) {
         res.status(500).send("Internal server error");
     }
 });
+
 
 module.exports = router;
