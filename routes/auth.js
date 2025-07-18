@@ -134,60 +134,29 @@ router.post('/getanotheruser/:username', fetchuser, async (req, res) => {
 		res.status(500).send("Internal server error");
 	}
 });
+ //combined profile update
+router.put('/update-profile', fetchuser, async (req, res) => {
+  const { username, bio, avatar } = req.body;
 
-//Route 5: Change the user bio
-router.post('/changebio/:id', fetchuser, async (req, res) => {
-	try {
-		const { bio } = req.body;
+  try {
+    const updates = {};
+    if (username) updates.username = username;
+    if (bio) updates.bio = bio;
+    if (avatar) updates.avatar = avatar;
 
-		if (!bio || bio.trim() === '') {
-			return res.status(400).json({ error: "Bio cannot be empty" });
-		}
+    const updatedUser = await User.findByIdAndUpdate(
+      req.user.id,
+      { $set: updates },
+      { new: true }
+    ).select('-password');
 
-		let user = await User.findById(req.params.id);
-		if (!user) {
-			return res.status(404).json({ error: "User not found" });
-		}
-
-		user = await User.findByIdAndUpdate(
-			req.params.id,
-			{ $set: { bio: bio } },
-			{ new: true }
-		);
-
-		res.json({ bio: user.bio });
-	} catch (error) {
-		console.error(error.message);
-		res.status(500).send("Internal server error");
-	}
+    res.json({ success: true, user: updatedUser });
+  } catch (error) {
+    console.error(error.message);
+    res.status(500).json({ error: "Internal server error" });
+  }
 });
 
-//Route 5: Change the user username
-router.post('/changeusername/:id', fetchuser, async (req, res) => {
-	try {
-		const { username } = req.body;
-
-		if (!username || username.trim() === '') {
-			return res.status(400).json({ error: "Bio cannot be empty" });
-		}
-
-		let user = await User.findById(req.params.id);
-		if (!user) {
-			return res.status(404).json({ error: "User not found" });
-		}
-
-		user = await User.findByIdAndUpdate(
-			req.params.id,
-			{ $set: { username: username } },
-			{ new: true }
-		);
-
-		res.json({ username: user.username });
-	} catch (error) {
-		console.error(error.message);
-		res.status(500).send("Internal server error");
-	}
-});
 //route 6:  Send Request
 router.post('/send-request/:receiverId', fetchuser, async (req, res) => {
 	try {
@@ -288,6 +257,30 @@ router.post('/reject-request/:senderId', fetchuser, async (req, res) => {
 		res.status(500).send("Internal server error");
 	}
 })
+
+//edit avatar
+router.put('/avatar', fetchuser, async (req, res) => {
+  const { avatar } = req.body;
+
+  if (!avatar) {
+    return res.status(400).json({ error: 'Avatar URL is required' });
+  }
+
+  try {
+    // Assuming fetchuser middleware sets req.user to the logged-in user document
+    req.user.avatar = avatar;
+    await req.user.save();
+
+    res.json({ success: true, avatar: req.user.avatar });
+  } catch (error) {
+    console.error('Error updating avatar:', error.message);
+    res.status(500).json({ error: 'Server error while updating avatar' });
+  }
+});
+
+module.exports = router;
+
+
 
 
 module.exports = router;
