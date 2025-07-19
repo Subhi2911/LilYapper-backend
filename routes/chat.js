@@ -342,4 +342,53 @@ router.put('/group-permissions/:id', fetchuser, [
 });
 
 
+router.get('/connections', fetchuser, async (req, res) => {
+    try {
+        const chats = await Chat.find({
+            users: req.user._id
+        })
+        .populate("users", "-password")
+        .populate("latestMessage")
+        .populate({
+            path: "latestMessage",
+            populate: {
+                path: "sender",
+                select: "username avatar"
+            }
+        });
+
+        const connections = chats.map(chat => {
+            if (chat.isGroupChat) {
+                return {
+                    _id: chat._id,
+                    isGroupChat: true,
+                    chatName: chat.chatName,
+                    avatar: "/avatars/group.png",
+                    latestMessage: chat.latestMessage || null
+                };
+            } else {
+                const otherUser = chat.users.find(
+                    user => user._id.toString() !== req.user._id.toString()
+                );
+
+                return {
+                    _id: chat._id,
+                    isGroupChat: false,
+                    username: otherUser.username,
+                    avatar: otherUser.avatar || "/avatars/default.png",
+                    latestMessage: chat.latestMessage || null
+                };
+            }
+        });
+
+        res.json(connections);
+    } catch (err) {
+        console.error(err.message);
+        res.status(500).send("Internal server error");
+    }
+});
+
+
+
+
 module.exports = router;

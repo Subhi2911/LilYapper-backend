@@ -3,11 +3,10 @@ const User = require('../models/User');
 const router = express.Router();
 const { body, validationResult } = require('express-validator');
 const bcrypt = require('bcryptjs');
-var jwt = require('jsonwebtoken');
+const jwt = require('jsonwebtoken');
 const fetchuser = require('../middleware/fetchuser');
 require('dotenv').config({ path: '.env.local' });
 const JWT_SECRET = process.env.JWT_SECRET;
-
 
 // ROUTE 1: Create a user using POST "/api/auth/register"
 router.post('/register', [
@@ -26,11 +25,9 @@ router.post('/register', [
 		let user_name = await User.findOne({ username: req.body.username });
 
 		if (user) {
-			let success = false;
 			return res.status(400).json({ success, error: "User with this email already exists." });
 		}
 		if (user_name) {
-			let success = false;
 			return res.status(400).json({ success, error: "User with this username already exists." });
 		}
 
@@ -50,7 +47,7 @@ router.post('/register', [
 		};
 
 		const authToken = jwt.sign(data, JWT_SECRET);
-		const success = true;
+		success = true;
 		res.json({ success, authToken });
 
 	} catch (error) {
@@ -67,7 +64,6 @@ router.post('/login', [
 	let success = false;
 	const errors = validationResult(req);
 	if (!errors.isEmpty()) {
-		const success = false;
 		return res.status(400).json({ success, errors: errors.array() });
 	}
 
@@ -77,14 +73,13 @@ router.post('/login', [
 		let user = await User.findOne({ email });
 
 		if (!user) {
-			const success = false;
-			return res.status(400).json({ success, error: "Invalid credentials" });
+			return res.status(400).json({ success: false, error: "Invalid credentials" });
 		}
 
 		const passwordCompare = await bcrypt.compare(password, user.password);
 		if (!passwordCompare) {
-			const success = false;
-			return res.status(400).json({ success, error: "Invalid credentials" });
+			console.log('user:', user);
+			return res.status(400).json({ success: false, error: "Invalid credentials" });
 		}
 
 		const data = {
@@ -94,70 +89,86 @@ router.post('/login', [
 		};
 
 		const authToken = jwt.sign(data, JWT_SECRET);
-		const success = true;
-		res.json({ success, authToken });
+		success = true;
 
-
-	} catch (error) {
-		console.error(success, error.message);
-		res.status(500).send("Internal server error");
-	}
-});
-
-//Route 3: Get loggedin user details using: POST"/api/auth/getuser. Login required.
-router.post('/getuser', fetchuser, async (req, res) => {
-
-	try {
-		const userId = req.user.id;
-		const user = await User.findById(userId).select("-password")
-		res.send(user);
+		res.json({ success, authToken, user }); 
 	} catch (error) {
 		console.error(error.message);
 		res.status(500).send("Internal server error");
 	}
 });
 
-//Route 4: get user details of other user (limited data)
-router.post('/getanotheruser/:username', fetchuser, async (req, res) => {
+// ROUTE 3: Get logged-in user details using POST "/api/auth/getuser". Login required.
+router.post('/getuser', fetchuser, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    // Populate friends field (if it contains user references)
+    const user = await User.findById(userId)
+      .select("-password")
+      .populate('friends', '_id');  // get just ids of friends
 
+    if (!user) {
+      return res.status(404).json({ success: false, error: 'User not found' });
+    }
+
+    // Map friends to their _id strings
+    const friendsIds = user.friends ? user.friends.map(friend => friend._id.toString()) : [];
+
+    res.json({
+      success: true,
+      user: {
+        ...user.toObject(),
+        friends: friendsIds,
+      }
+    });
+  } catch (error) {
+    console.error(error.message);
+    res.status(500).send("Internal server error");
+  }
+});
+
+
+// ROUTE 4: Get other user details (limited data)
+router.post('/getanotheruser/:userId', fetchuser, async (req, res) => {
 	try {
-		const username = req.params.username;
-		const user = await User.findOne({ username }).select("username bio date");
+		const userId = req.params.userId;
+		const user = await User.findById(userId).select("avatar username bio date");
+
 		if (!user) {
 			return res.status(404).json({ error: "User not found" });
 		}
 
 		res.json(user);
-
 	} catch (error) {
 		console.error(error.message);
 		res.status(500).send("Internal server error");
 	}
 });
- //combined profile update
+
+// ROUTE 5: Update profile (username, bio, avatar)
 router.put('/update-profile', fetchuser, async (req, res) => {
-  const { username, bio, avatar } = req.body;
+	const { username, bio, avatar } = req.body;
 
-  try {
-    const updates = {};
-    if (username) updates.username = username;
-    if (bio) updates.bio = bio;
-    if (avatar) updates.avatar = avatar;
+	try {
+		const updates = {};
+		if (username) updates.username = username;
+		if (bio) updates.bio = bio;
+		if (avatar) updates.avatar = avatar;
 
-    const updatedUser = await User.findByIdAndUpdate(
-      req.user.id,
-      { $set: updates },
-      { new: true }
-    ).select('-password');
+		const updatedUser = await User.findByIdAndUpdate(
+			req.user.id,
+			{ $set: updates },
+			{ new: true }
+		).select('-password');
 
-    res.json({ success: true, user: updatedUser });
-  } catch (error) {
-    console.error(error.message);
-    res.status(500).json({ error: "Internal server error" });
-  }
+		res.json({ success: true, user: updatedUser });
+	} catch (error) {
+		console.error(error.message);
+		res.status(500).json({ error: "Internal server error" });
+	}
 });
 
-//route 6:  Send Request
+// ROUTE 6: Send friend request
 router.post('/send-request/:receiverId', fetchuser, async (req, res) => {
 	try {
 		const senderId = req.user.id;
@@ -168,7 +179,9 @@ router.post('/send-request/:receiverId', fetchuser, async (req, res) => {
 		}
 
 		const receiver = await User.findById(receiverId);
-		if (!receiver) {
+		const sender = await User.findById(senderId);
+
+		if (!receiver || !sender) {
 			return res.status(404).json({ error: "User not found!" });
 		}
 
@@ -180,8 +193,14 @@ router.post('/send-request/:receiverId', fetchuser, async (req, res) => {
 			return res.status(400).json({ error: "Request already sent!" });
 		}
 
+		// Add senderId to receiver.pendingRequests
 		receiver.pendingRequests.push(senderId);
 		await receiver.save();
+
+		// Add receiverId to sender.sentRequests
+		if (!sender.sentRequests) sender.sentRequests = [];
+		sender.sentRequests.push(receiverId);
+		await sender.save();
 
 		res.json({ success: true, message: 'Friend request sent' });
 	} catch (error) {
@@ -190,7 +209,7 @@ router.post('/send-request/:receiverId', fetchuser, async (req, res) => {
 	}
 });
 
-//Route 7 : Accept Request
+// ROUTE 7: Accept friend request
 router.post('/accept-request/:senderId', fetchuser, async (req, res) => {
 	try {
 		const { senderId } = req.params;
@@ -207,29 +226,24 @@ router.post('/accept-request/:senderId', fetchuser, async (req, res) => {
 			return res.status(404).json({ error: 'No such request exists!' });
 		}
 
-		// Add each other as friends 
 		receiver.friends.push(sender._id);
 		sender.friends.push(receiver._id);
 
-		// Remove senderId from receiver's pendingRequests
 		receiver.pendingRequests = receiver.pendingRequests.filter(
 			id => id.toString() !== senderId
 		);
 
-		// Save both
 		await receiver.save();
 		await sender.save();
 
 		res.json({ success: true, message: "Friend request accepted" });
-
 	} catch (error) {
 		console.error(error.message);
 		res.status(500).send("Internal server error");
 	}
 });
 
-
-//Route :8 Reject Request
+// ROUTE 8: Reject friend request
 router.post('/reject-request/:senderId', fetchuser, async (req, res) => {
 	try {
 		const receiverId = req.user.id;
@@ -248,39 +262,145 @@ router.post('/reject-request/:senderId', fetchuser, async (req, res) => {
 
 		receiver.pendingRequests = receiver.pendingRequests.filter(id => id.toString() !== senderId);
 
-		receiver.save();
+		await receiver.save();
 
-		res.json({ success: true, message: 'Friend request Rejected' })
-
+		res.json({ success: true, message: 'Friend request rejected' });
 	} catch (error) {
 		console.error(error.message);
 		res.status(500).send("Internal server error");
 	}
-})
-
-//edit avatar
-router.put('/avatar', fetchuser, async (req, res) => {
-  const { avatar } = req.body;
-
-  if (!avatar) {
-    return res.status(400).json({ error: 'Avatar URL is required' });
-  }
-
-  try {
-    // Assuming fetchuser middleware sets req.user to the logged-in user document
-    req.user.avatar = avatar;
-    await req.user.save();
-
-    res.json({ success: true, avatar: req.user.avatar });
-  } catch (error) {
-    console.error('Error updating avatar:', error.message);
-    res.status(500).json({ error: 'Server error while updating avatar' });
-  }
 });
 
-module.exports = router;
+// ROUTE 9: Update avatar
+router.put('/avatar', fetchuser, async (req, res) => {
+	const { avatar } = req.body;
+
+	if (!avatar) {
+		return res.status(400).json({ error: 'Avatar URL is required' });
+	}
+
+	try {
+		const user = await User.findById(req.user.id);
+		user.avatar = avatar;
+		await user.save();
+
+		res.json({ success: true, avatar: user.avatar });
+	} catch (error) {
+		console.error('Error updating avatar:', error.message);
+		res.status(500).json({ error: 'Server error while updating avatar' });
+	}
+});
+
+// ROUTE 10: Get all users except logged-in user, paginated
+router.get('/allusers', fetchuser, async (req, res) => {
+	try {
+		const loggedInUserId = req.user.id;
+
+		const page = Math.max(parseInt(req.query.page) || 1, 1);
+		const limit = Math.min(Math.max(parseInt(req.query.limit) || 4, 1), 50);
+		const skip = (page - 1) * limit;
+
+		const totalUsers = await User.countDocuments({ _id: { $ne: loggedInUserId } });
+
+		const users = await User.find({ _id: { $ne: loggedInUserId } })
+			.select('avatar username bio date')
+			.sort({ username: 1 })  // consistent order
+			.skip(skip)
+			.limit(limit);
+
+		res.json({
+			success: true,
+			users,
+			pagination: {
+				totalUsers,
+				currentPage: page,
+				totalPages: Math.ceil(totalUsers / limit),
+				pageSize: users.length,
+			}
+		});
+	} catch (error) {
+		console.error(error.message);
+		res.status(500).send("Internal server error");
+	}
+});
 
 
+// ROUTE 11: Cancel friend request
+router.post('/cancel-request/:receiverId', fetchuser, async (req, res) => {
+	try {
+		const senderId = req.user.id;
+		const receiverId = req.params.receiverId;
+
+		const receiver = await User.findById(receiverId);
+		const sender = await User.findById(senderId);
+
+		if (!receiver || !sender) {
+			return res.status(404).json({ error: 'User not found' });
+		}
+
+		if (!receiver.pendingRequests.includes(senderId)) {
+			return res.status(400).json({ error: 'No pending request to cancel' });
+		}
+
+		receiver.pendingRequests = receiver.pendingRequests.filter(id => id.toString() !== senderId);
+		await receiver.save();
+
+		sender.sentRequests = (sender.sentRequests || []).filter(id => id.toString() !== receiverId);
+		await sender.save();
+
+		res.json({ success: true, message: 'Friend request cancelled' });
+	} catch (error) {
+		console.error(error.message);
+		res.status(500).send('Internal server error');
+	}
+});
+
+
+// GET /api/friendrequests - Get pending friend requests for logged-in user
+router.get('/friendrequests', fetchuser, async (req, res) => {
+	try {
+		const userId = req.user.id;
+
+		// Find user and populate pendingRequests with basic user info
+		const user = await User.findById(userId)
+			.populate('pendingRequests', 'username avatar email');
+
+		if (!user) {
+			return res.status(404).json({ success: false, error: 'User not found' });
+		}
+
+		res.json({ success: true, pendingRequests: user.pendingRequests });
+	} catch (error) {
+		console.error('Error fetching friend requests:', error);
+		res.status(500).json({ success: false, error: 'Server error' });
+	}
+});
+
+// GET /api/auth/sent-requests
+// Returns: { success: true, sentRequests: [userId1, userId2, ...] }
+router.get('/sent-requests', fetchuser, async (req, res) => {
+	try {
+		const user = await User.findById(req.user.id).select('sentRequests');
+		if (!user) return res.status(404).json({ success: false, error: "User not found" });
+
+		res.json({ success: true, sentRequests: user.sentRequests || [] });
+	} catch (err) {
+		console.error(err);
+		res.status(500).json({ success: false, error: "Internal server error" });
+	}
+});
+
+
+//get friends
+router.get('/friends', fetchuser, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id).populate('friends', 'avatar username bio');
+    res.json(user.friends);
+  } catch (err) {
+    console.error(err.message);
+    res.status(500).send('Server Error');
+  }
+});
 
 
 module.exports = router;
