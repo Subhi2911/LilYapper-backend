@@ -78,11 +78,12 @@ io.on('connection', (socket) => {
 });
 
 // API Routes
-app.use('/api/auth', require('./routes/auth'));
-app.use('/api/chat', require('./routes/chat'));
-app.use('/api/message', require('./routes/message'));
+app.use('/api/auth', require('./routes/auth')(io));
+app.use('/api/chat', require('./routes/chat')(io));
+app.use('/api/message', require('./routes/message')(io));
+app.use('/api/notifications', require('./routes/notification'));
 
-// ✅ Route to fetch online users
+// Route to fetch online users
 app.get('/api/online-users', (req, res) => {
   res.json([...onlineUsers]);
 });

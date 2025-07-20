@@ -2,57 +2,81 @@ const express = require('express');
 const fetchuser = require('../middleware/fetchuser');
 const { body, validationResult } = require('express-validator');
 const Message = require('../models/Message');
-const router = express.Router();
+const Chat = require('../models/Chat');
 const { encrypt, decrypt } = require('../utils/encryption');
 
-// Route 1: Send a new message
-router.post(
-  '/',
-  fetchuser,
-  [
-    body('content', 'Message content is required').notEmpty().isLength({ max: 500 }),
-    body('chatId', 'Chat ID is required').notEmpty().isMongoId(),
-  ],
-  async (req, res) => {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+module.exports = (io) => {
+  const router = express.Router();
 
-    try {
-      const { content, chatId } = req.body;
-      const encryptedContent = encrypt(content);
+  // Send a new message
+  router.post(
+    '/',
+    fetchuser,
+    [
+      body('content', 'Message content is required').notEmpty().isLength({ max: 500 }),
+      body('chatId', 'Chat ID is required').notEmpty().isMongoId(),
+    ],
+    async (req, res) => {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
 
-      const newMessage = new Message({
-        sender: req.user.id,
-        content: encryptedContent,
-        chat: chatId,
-      });
+      try {
+        const { content, chatId } = req.body;
+        const encryptedContent = encrypt(content);
 
-      await newMessage.save();
+        const newMessage = new Message({
+          sender: req.user.id,
+          content: encryptedContent,
+          chat: chatId,
+        });
 
-      res.status(201).json({ message: 'Message sent successfully' });
-    } catch (error) {
-      console.error(error.message);
-      res.status(500).send('Internal server error');
+        const savedMessage = await newMessage.save();
+
+        // Update latestMessage in Chat
+        await Chat.findByIdAndUpdate(chatId, { latestMessage: savedMessage._id });
+
+        await savedMessage.populate('sender', 'username avatar');
+
+        const decryptedMessage = {
+          ...savedMessage.toObject(),
+          content, // original plain text to send to client
+        };
+
+        // Emit notification to all other users in the chat
+        const chat = await Chat.findById(chatId).populate('users', '_id');
+        chat.users.forEach((user) => {
+          if (user._id.toString() !== req.user.id) {
+            io.to(user._id.toString()).emit('notification', {
+              chatId,
+              senderId: req.user.id,
+              message: content,  // decrypted content
+            });
+          }
+        });
+
+        res.status(201).json(decryptedMessage);
+      } catch (error) {
+        console.error(error.message);
+        res.status(500).send('Internal server error');
+      }
     }
-  }
-);
+  );
 
-// Route 2: Receive messages for a chat (decrypted)
-router.get('/:chatId', fetchuser, async (req, res) => {
-  try {
-    const messages = await Message.find({ chat: req.params.chatId }).populate('sender', 'username avatar');
+  // Fetch messages (decrypted)
+  router.get('/:chatId', fetchuser, async (req, res) => {
+    try {
+      const messages = await Message.find({ chat: req.params.chatId }).populate('sender', 'username avatar');
+      const decryptedMessages = messages.map((msg) => ({
+        ...msg.toObject(),
+        content: decrypt(msg.content),
+      }));
 
-    // Decrypt content before sending
-    const decryptedMessages = messages.map(msg => ({
-      ...msg.toObject(),
-      content: decrypt(msg.content),
-    }));
+      res.json(decryptedMessages);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  });
 
-    res.json(decryptedMessages);
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
-
-module.exports = router;
+  return router;
+};
