@@ -26,7 +26,11 @@ const chatSchema = new mongoose.Schema(
       rename: { type: String, enum: ['admin', 'all'], default: 'admin' },
       addUser: { type: String, enum: ['admin', 'all'], default: 'admin' },
       removeUser: { type: String, enum: ['admin', 'all'], default: 'admin' }
-    }
+    },
+    avatar: {
+      type: String,
+      default: '/avatars/hugging.png', // optional default
+    },
 
   },
   { timestamps: true }

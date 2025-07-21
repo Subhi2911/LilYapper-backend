@@ -4,6 +4,7 @@ const User = require('../models/User');
 const fetchuser = require('../middleware/fetchuser');
 const { body, validationResult } = require('express-validator');
 const { decrypt } = require('../utils/encryption');
+const Message = require('../models/Message');
 const router = express.Router();
 module.exports = (io) => {
     // Route 1: create one-to-one chat
@@ -105,12 +106,18 @@ module.exports = (io) => {
     // Route 3: Create new group chat
     router.post('/group', fetchuser, [
         body('chatName').isLength({ min: 3, max: 30 }).withMessage('Group name must be 3-30 characters'),
-        body('userIds').isArray({ min: 2 }).withMessage('At least 2 users required').custom(ids => ids.every(id => /^[a-f\d]{24}$/i.test(id)))
+        body('userIds')
+            .isArray({ min: 2 }).withMessage('At least 2 users required')
+            .custom(ids => ids.every(id => /^[a-f\d]{24}$/i.test(id))),
+        body('avatar')
+            .isString()
+            .notEmpty()
+            .withMessage('Please select an avatar for the group'),
     ], async (req, res) => {
         const errors = validationResult(req);
         if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
 
-        const { chatName, userIds } = req.body;
+        const { chatName, userIds, avatar } = req.body;
         const currentUserId = req.user.id;
 
         try {
@@ -130,35 +137,31 @@ module.exports = (io) => {
                 isGroupChat: true,
                 users: [...userIds, currentUserId],
                 groupAdmin: currentUserId,
-                deletedFor: []
+                deletedFor: [],
+                avatar: avatar || '/avatars/hugging.png',
             });
 
             const fullChat = await Chat.findById(group._id)
                 .populate('users', '-password')
                 .populate('groupAdmin', '-password');
-            const groupMembers = group.users; // array of userIds
-            const adminId = group.groupAdmin;      //  admin id
 
-            groupMembers.forEach((memberId) => {
-                if (memberId !== adminId) {
-                    io.to(memberId).emit('notification', {
+            group.users.forEach((memberId) => {
+                if (memberId.toString() !== currentUserId.toString()) {
+                    io.to(memberId.toString()).emit('notification', {
                         type: 'group_added',
-                        message: `You were added to the group ${group.name}`,
+                        message: `You were added to the group ${group.chatName}`,
                         groupId: group._id,
                     });
                 }
             });
 
-
             res.status(201).json(fullChat);
         } catch (err) {
-            console.log('Request body:', req.body);
-            console.log('Current user id:', req.user.id);
-            console.log('UserIds sent:', userIds);
-
+            console.error(err);
             res.status(500).json({ error: 'Internal Server Error' });
         }
     });
+
 
     // Route 4: Rename group
     router.put('/rename/:id', fetchuser, [
@@ -296,6 +299,8 @@ module.exports = (io) => {
     // Route 7: Delete chat (soft delete for current user)
     router.delete('/deletechat/:chatId', fetchuser, async (req, res) => {
         try {
+            console.log('Reached DELETE /deletechat with ID:', req.params.chatId);
+            console.log('User ID from token:', req.user.id);
             const chatId = req.params.chatId;
             const userId = req.user.id;
 
@@ -380,7 +385,8 @@ module.exports = (io) => {
         try {
             const chats = await Chat.find({
                 users: req.user._id,
-                isGroupChat: false
+                isGroupChat: false,
+                deletedFor: { $ne: req.user.id }
             })
                 .populate("users", "-password")
                 .populate("latestMessage")
@@ -392,7 +398,7 @@ module.exports = (io) => {
                     }
                 });
 
-            const connections = chats.map(chat => {
+            const connections = await Promise.all(chats.map(async (chat) => {
                 if (chat.latestMessage?.content) {
                     chat.latestMessage.content = decrypt(chat.latestMessage.content);
                 }
@@ -401,14 +407,22 @@ module.exports = (io) => {
                     user => user._id.toString() !== req.user._id.toString()
                 );
 
+                // Count unread messages
+                const unreadCount = await Message.countDocuments({
+                    chat: chat._id,
+                    sender: { $ne: req.user._id },
+                    readBy: { $ne: req.user._id }
+                });
+
                 return {
                     _id: chat._id,
                     isGroupChat: false,
                     username: otherUser.username,
                     avatar: otherUser.avatar || "/avatars/default.png",
-                    latestMessage: chat.latestMessage || null
+                    latestMessage: chat.latestMessage || null,
+                    unreadCount
                 };
-            });
+            }));
 
             res.json(connections);
         } catch (err) {
@@ -416,6 +430,7 @@ module.exports = (io) => {
             res.status(500).send("Internal server error");
         }
     });
+
 
 
     //fetching groups only with pagination
@@ -431,8 +446,8 @@ module.exports = (io) => {
 
             const total = await Chat.countDocuments(filter);
 
-            const groups = await Chat.find(filter)
-                .populate('users', 'username avatar')
+            const groups = await Chat.find({...filter, deletedFor: { $ne: req.user.id }})
+                .populate('users', 'username avatar bio')
                 .populate('groupAdmin', 'username avatar')
                 .populate('latestMessage')
                 .populate({
@@ -446,21 +461,30 @@ module.exports = (io) => {
                 .skip((page - 1) * limit)
                 .limit(limit);
 
-            const formattedGroups = groups.map(chat => {
+            const formattedGroups = await Promise.all(groups.map(async (chat) => {
                 if (chat.latestMessage?.content) {
                     chat.latestMessage.content = decrypt(chat.latestMessage.content);
                 }
 
+                // 🔴 Count unread messages
+                const unreadCount = await Message.countDocuments({
+                    chat: chat._id,
+                    sender: { $ne: req.user._id },
+                    readBy: { $ne: req.user._id }
+                });
+
                 return {
                     _id: chat._id,
                     chatName: chat.chatName,
-                    avatar: '/avatars/group.png',
+                    avatar: chat.avatar,
                     users: chat.users,
                     groupAdmin: chat.groupAdmin,
                     latestMessage: chat.latestMessage || null,
-                    isGroupChat: true
+                    isGroupChat: true,
+                    unreadCount
                 };
-            });
+            }));
+
 
 
             res.json({

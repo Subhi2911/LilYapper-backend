@@ -28,28 +28,28 @@ module.exports = (io) => {
           sender: req.user.id,
           content: encryptedContent,
           chat: chatId,
+          readBy: [req.user.id]
         });
 
         const savedMessage = await newMessage.save();
-
-        // Update latestMessage in Chat
-        await Chat.findByIdAndUpdate(chatId, { latestMessage: savedMessage._id });
-
         await savedMessage.populate('sender', 'username avatar');
+
+        const chat = await Chat.findById(chatId).populate('users', '_id');
+        chat.latestMessage = savedMessage._id;
+        await chat.save(); // updates updatedAt too
 
         const decryptedMessage = {
           ...savedMessage.toObject(),
-          content, // original plain text to send to client
+          content, // decrypted
         };
 
-        // Emit notification to all other users in the chat
-        const chat = await Chat.findById(chatId).populate('users', '_id');
         chat.users.forEach((user) => {
           if (user._id.toString() !== req.user.id) {
+            io.to(user._id.toString()).emit('newMessage', decryptedMessage);
             io.to(user._id.toString()).emit('notification', {
               chatId,
               senderId: req.user.id,
-              message: content,  // decrypted content
+              message: content,
             });
           }
         });
@@ -57,15 +57,30 @@ module.exports = (io) => {
         res.status(201).json(decryptedMessage);
       } catch (error) {
         console.error(error.message);
-        res.status(500).send('Internal server error');
+        res.status(500).json({ error: 'Internal server error' });
       }
     }
   );
 
+
   // Fetch messages (decrypted)
   router.get('/:chatId', fetchuser, async (req, res) => {
     try {
-      const messages = await Message.find({ chat: req.params.chatId }).populate('sender', 'username avatar');
+      // Fetch messages
+      const messages = await Message.find({ chat: req.params.chatId })
+        .populate('sender', 'username avatar');
+
+      // Update messages to mark as read
+      await Message.updateMany(
+        {
+          chat: req.params.chatId,
+          sender: { $ne: req.user.id },          // Don't mark self-sent messages
+          readBy: { $ne: req.user.id }           // Only if not already read
+        },
+        { $push: { readBy: req.user.id } }       // Add user to readBy array
+      );
+
+      // Decrypt message contents
       const decryptedMessages = messages.map((msg) => ({
         ...msg.toObject(),
         content: decrypt(msg.content),
@@ -77,6 +92,25 @@ module.exports = (io) => {
       res.status(500).json({ error: 'Internal server error' });
     }
   });
+  //mark as read
+  router.put('/markRead/:chatId', fetchuser, async (req, res) => {
+    try {
+      const chatId = req.params.chatId;
+      const userId = req.user._id;
+
+      // Update all messages in the chat where this user has not marked as read
+      await Message.updateMany(
+        { chat: chatId, readBy: { $ne: userId } },
+        { $push: { readBy: userId } }
+      );
+
+      res.json({ success: true });
+    } catch (err) {
+      console.error(err.message);
+      res.status(500).send('Internal server error');
+    }
+  });
+
 
   return router;
 };

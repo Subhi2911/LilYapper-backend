@@ -5,13 +5,24 @@ const Notification = require("../models/Notification");
 require('dotenv').config({ path: '.env.local' });
 
 // GET all notifications for the logged-in user
-router.get('/', fetchuser, async (req, res) => {
+router.get('/notifications', fetchuser, async (req, res) => {
   try {
-    const notifications = await Notification.find({ recipient: req.user.id }).sort({ createdAt: -1 });
-    res.json({ success: true, notifications });
-  } catch (error) {
-    console.error('Error fetching notifications:', error);
-    res.status(500).json({ success: false, error: 'Server error' });
+    const notifications = await Notification.find({ recipientId: req.user.id }).sort({ createdAt: -1 });
+    res.json(notifications);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch notifications' });
+  }
+});
+
+router.put('/notifications/mark-read', fetchuser, async (req, res) => {
+  try {
+    await Notification.updateMany(
+      { recipientId: req.user.id, isRead: false },
+      { $set: { isRead: true } }
+    );
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to mark notifications as read' });
   }
 });
 

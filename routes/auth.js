@@ -5,6 +5,9 @@ const { body, validationResult } = require('express-validator');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const fetchuser = require('../middleware/fetchuser');
+const User = require("../models/User");
+const Notification = require("../models/Notification");
+const mongoose = require("mongoose");
 //const Notification = require("../models/Notification");
 require('dotenv').config({ path: '.env.local' });
 const JWT_SECRET = process.env.JWT_SECRET;
@@ -170,10 +173,7 @@ module.exports = (io) => {
 		}
 	});
 
-	// ROUTE 6: Send friend request
-	const Notification = require('../models/Notification'); // adjust path
-	const User = require('../models/User');
-
+	// ROUTE 6: Send friend request 
 	router.post('/send-request/:id', fetchuser, async (req, res) => {
 		try {
 			const senderId = req.user.id;
@@ -190,26 +190,37 @@ module.exports = (io) => {
 				return res.status(404).json({ error: 'User not found' });
 			}
 
-			// Avoid duplicate requests
-			if (receiver.friendRequests.includes(senderId)) {
+			// Initialize arrays if undefined
+			if (!Array.isArray(sender.sentRequests)) sender.sentRequests = [];
+			if (!Array.isArray(receiver.pendingRequests)) receiver.pendingRequests = [];
+
+			// Check if request already sent
+			if (sender.sentRequests.some(id => id.toString() === receiverId)) {
+				return res.status(400).json({ error: 'Request already sent' });
+			}
+			if (receiver.pendingRequests.some(id => id.toString() === senderId)) {
 				return res.status(400).json({ error: 'Request already sent' });
 			}
 
-			// Add to receiver's friend requests
-			receiver.friendRequests.push(senderId);
+			// Push ids into respective arrays
+			sender.sentRequests.push(receiverId);
+			receiver.pendingRequests.push(senderId);
+
+			await sender.save();
 			await receiver.save();
 
-			// Create notification in DB
+			// Create notification
 			const notification = new Notification({
 				type: 'friend_request',
 				recipientId: receiverId,
-				senderId: senderId,
-				senderUsername: sender.username
+				senderId,
+				senderUsername: sender.username,
+				user: senderId
 			});
 			await notification.save();
 
-			// Emit socket notification (if online)
-			const io = req.app.get('io'); // socket.io instance passed in app.js
+			// Emit socket notification
+			const io = req.app.get('io');
 			io.to(receiverId).emit('notification', {
 				type: 'friend_request',
 				senderId,
@@ -243,25 +254,35 @@ module.exports = (io) => {
 				return res.status(404).json({ error: 'User not found' });
 			}
 
-			// Remove from friendRequests
-			receiver.friendRequests = receiver.friendRequests.filter(id => id.toString() !== senderId);
-			// Add to friends
-			if (!receiver.friends.includes(senderId)) receiver.friends.push(senderId);
-			if (!sender.friends.includes(receiverId)) sender.friends.push(receiverId);
+			// Initialize arrays if undefined
+			if (!Array.isArray(receiver.pendingRequests)) receiver.pendingRequests = [];
+			if (!Array.isArray(sender.sentRequests)) sender.sentRequests = [];
+			if (!Array.isArray(receiver.friends)) receiver.friends = [];
+			if (!Array.isArray(sender.friends)) sender.friends = [];
+
+			// Remove request from pendingRequests and sentRequests
+			receiver.pendingRequests = receiver.pendingRequests.filter(id => id.toString() !== senderId);
+			sender.sentRequests = sender.sentRequests.filter(id => id.toString() !== receiverId);
+
+			// Add friends (avoid duplicates)
+			if (!receiver.friends.some(id => id.toString() === senderId)) receiver.friends.push(senderId);
+			if (!sender.friends.some(id => id.toString() === receiverId)) sender.friends.push(receiverId);
 
 			await receiver.save();
 			await sender.save();
 
-			// 🔔 Create notification in DB
+			// Notification about acceptance
 			const notification = new Notification({
 				type: 'request_accepted',
-				recipientId: senderId,
-				senderId: receiverId,
-				senderUsername: receiver.username
+				recipientId: senderId,       // Who will receive this notification (sender)
+				senderId: receiverId,        // Who performed the action (receiver)
+				senderUsername: receiver.username,
+				message: `${receiver.username} accepted your friend request`, // You can add this field if your schema supports it
+				createdAt: new Date()
 			});
 			await notification.save();
 
-			// 🔌 Emit socket notification to sender
+			// Emit socket notification to sender
 			const io = req.app.get('io');
 			io.to(senderId).emit('notification', {
 				type: 'request_accepted',
@@ -278,6 +299,7 @@ module.exports = (io) => {
 			res.status(500).json({ error: 'Internal server error' });
 		}
 	});
+
 	// ROUTE 8: Reject friend request
 	router.post('/reject-request/:senderId', fetchuser, async (req, res) => {
 		try {
@@ -287,17 +309,23 @@ module.exports = (io) => {
 			const receiver = await User.findById(receiverId);
 			const sender = await User.findById(senderId);
 
-			if (!sender || !receiver) {
+			if (!receiver || !sender) {
 				return res.status(404).json({ error: 'User does not exist!' });
 			}
 
-			if (!receiver.pendingRequests.includes(senderId)) {
+			if (!Array.isArray(receiver.pendingRequests)) receiver.pendingRequests = [];
+			if (!Array.isArray(sender.sentRequests)) sender.sentRequests = [];
+
+			if (!receiver.pendingRequests.some(id => id.toString() === senderId)) {
 				return res.status(404).json({ error: 'No such request exists!' });
 			}
 
+			// Remove senderId from receiver.pendingRequests and receiverId from sender.sentRequests
 			receiver.pendingRequests = receiver.pendingRequests.filter(id => id.toString() !== senderId);
+			sender.sentRequests = sender.sentRequests.filter(id => id.toString() !== receiverId);
 
 			await receiver.save();
+			await sender.save();
 
 			res.json({ success: true, message: 'Friend request rejected' });
 		} catch (error) {

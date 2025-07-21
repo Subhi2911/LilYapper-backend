@@ -31,6 +31,7 @@ const io = new Server(server, {
   },
 });
 
+app.set('io', io);
 // Socket.IO Authentication Middleware
 io.use((socket, next) => {
   const token = socket.handshake.auth.token;
