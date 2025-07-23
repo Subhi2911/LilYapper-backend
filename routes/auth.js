@@ -53,8 +53,8 @@ module.exports = (io) => {
 
 			const authToken = jwt.sign(data, JWT_SECRET);
 			success = true;
-			res.json({ success, authToken, user });
 
+			res.json({ success, authToken, user });
 		} catch (error) {
 			console.error(error.message);
 			res.status(500).send("Internal server error");
@@ -95,6 +95,7 @@ module.exports = (io) => {
 
 			const authToken = jwt.sign(data, JWT_SECRET);
 			success = true;
+
 			res.json({ success, authToken, user });
 		} catch (error) {
 			console.error(error.message);

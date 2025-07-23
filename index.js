@@ -59,6 +59,8 @@ io.on('connection', (socket) => {
   const userId = socket.user.id;
   console.log('User connected:', userId);
   onlineUsers.add(userId);
+  io.emit("user-online-status", [...onlineUsers]);
+
 
   socket.join(userId);
 
@@ -83,6 +85,7 @@ io.on('connection', (socket) => {
   socket.on('disconnect', () => {
     console.log('User disconnected:', userId);
     onlineUsers.delete(userId);
+    io.emit("user-online-status", [...onlineUsers]);
   });
 });
 
