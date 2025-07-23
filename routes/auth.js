@@ -53,7 +53,7 @@ module.exports = (io) => {
 
 			const authToken = jwt.sign(data, JWT_SECRET);
 			success = true;
-			res.json({ success, authToken });
+			res.json({ success, authToken, user });
 
 		} catch (error) {
 			console.error(error.message);
@@ -95,7 +95,6 @@ module.exports = (io) => {
 
 			const authToken = jwt.sign(data, JWT_SECRET);
 			success = true;
-
 			res.json({ success, authToken, user });
 		} catch (error) {
 			console.error(error.message);
