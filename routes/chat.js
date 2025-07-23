@@ -230,13 +230,33 @@ module.exports = (io) => {
                 return res.status(403).json({ error: "All users must be your friends." });
             }
 
-            const addedChat = await Chat.findByIdAndUpdate(
+            // Add users to group
+            const updatedChat = await Chat.findByIdAndUpdate(
                 req.params.id,
                 { $addToSet: { users: { $each: userIds } } },
                 { new: true }
             ).populate('users', '-password');
 
-            res.json({ message: 'Users added to group', users: addedChat.users });
+            // Create system message
+            const addedUsers = await User.find({ _id: { $in: userIds } });
+            const addedUsernames = addedUsers.map(u => u.username).join(', ');
+            const adderUsername = currentUser.username;
+
+            const systemMessage = new Message({
+                chat: req.params.id,
+                sender: null,
+                content: `${adderUsername} added ${addedUsernames} to the group`,
+                isSystem: true
+            });
+
+            await systemMessage.save();
+
+            res.json({
+                message: 'Users added to group',
+                users: updatedChat.users,
+                systemMessage
+            });
+
         } catch (error) {
             console.error(error.message);
             res.status(500).send("Internal server error");
@@ -265,36 +285,46 @@ module.exports = (io) => {
                 return res.status(403).json({ error: 'You are not a member of this group' });
             }
 
-            // Remove users from chat.users
+            // Remove users
             chat.users = chat.users.filter(id => !userIds.includes(id.toString()));
 
-            // Check if the admin is removed
+            // Reassign admin if needed
             const adminId = chat.groupAdmin.toString();
             const removedAdmin = userIds.includes(adminId);
 
             if (removedAdmin) {
-                // Admin left/removed — assign new admin randomly from remaining users
                 if (chat.users.length > 0) {
                     const randomIndex = Math.floor(Math.random() * chat.users.length);
                     chat.groupAdmin = chat.users[randomIndex];
                 } else {
-                    // No users left — optional: delete the group or set admin to null
                     chat.groupAdmin = null;
-                    // Optionally: await chat.remove();
-                    // return res.json({ message: 'Group deleted as no users remain.' });
                 }
             }
 
+            // SYSTEM MESSAGE
+            const removedUsers = await User.find({ _id: { $in: userIds } });
+            const remover = await User.findById(req.user.id);
+
+            const systemMessage = new Message({
+                chat: chat._id,
+                content: `${removedUsers.map(u => u.username).join(', ')} was removed from the group by ${remover.username}`,
+                isSystem: true,
+            });
+
+            await systemMessage.save();
             await chat.save();
 
-            res.json({ message: 'Users removed successfully.', newAdmin: chat.groupAdmin });
+            res.json({
+                message: 'Users removed successfully.',
+                newAdmin: chat.groupAdmin,
+                systemMessage,
+            });
+
         } catch (error) {
             console.error(error.message);
             res.status(500).send("Internal server error");
         }
     });
-
-
 
     // Route 7: Delete chat (soft delete for current user)
     router.delete('/deletechat/:chatId', fetchuser, async (req, res) => {
@@ -389,6 +419,7 @@ module.exports = (io) => {
                 deletedFor: { $ne: req.user.id }
             })
                 .populate("users", "-password")
+                .populate('wallpaper')
                 .populate("latestMessage")
                 .populate({
                     path: "latestMessage",
@@ -419,7 +450,11 @@ module.exports = (io) => {
                     isGroupChat: false,
                     username: otherUser.username,
                     avatar: otherUser.avatar || "/avatars/default.png",
+                    bio: otherUser.bio,
+                    date: otherUser.date,
+                    otherUserId: otherUser._id,
                     latestMessage: chat.latestMessage || null,
+                    wallpaper: chat.wallpaper,
                     unreadCount
                 };
             }));
@@ -446,9 +481,10 @@ module.exports = (io) => {
 
             const total = await Chat.countDocuments(filter);
 
-            const groups = await Chat.find({...filter, deletedFor: { $ne: req.user.id }})
+            const groups = await Chat.find({ ...filter, deletedFor: { $ne: req.user.id } })
                 .populate('users', 'username avatar bio')
                 .populate('groupAdmin', 'username avatar')
+                .populate('wallpaper')
                 .populate('latestMessage')
                 .populate({
                     path: 'latestMessage',
@@ -502,6 +538,48 @@ module.exports = (io) => {
         }
     });
 
+    // PUT /api/chat/:chatId/wallpaper
+    router.put('/:chatId/wallpaper', fetchuser, async (req, res) => {
+        try {
+            const { url, senderbubble, receiverbubble } = req.body;
+
+            const chat = await Chat.findById(req.params.chatId);
+
+            if (!chat) return res.status(404).json({ error: 'Chat not found' });
+
+            if (!chat.users.includes(req.user.id)) {
+                return res.status(403).json({ error: 'Unauthorized' });
+            }
+
+            // Update wallpaper
+            chat.wallpaper = {
+                url,
+                senderbubble,
+                receiverbubble,
+            };
+            await chat.save();
+
+            // Send system message
+            const user = await User.findById(req.user.id);
+            const systemMsg = new Message({
+                sender: req.user.id,
+                chat: chat._id,
+                content: `🖼️ ${user.username} changed the wallpaper.`,
+                isSystem: true,
+            });
+            await systemMsg.save();
+
+            // Update latestMessage reference
+            chat.latestMessage = systemMsg._id;
+            await chat.save();
+
+            res.json({ success: true, wallpaper: chat.wallpaper });
+        } catch (err) {
+            console.log(req.body)
+            console.error(err);
+            res.status(500).json({ error: 'Server error' });
+        }
+    });
 
     return router;
 };

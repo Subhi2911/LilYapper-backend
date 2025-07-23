@@ -7,7 +7,7 @@ const jwt = require('jsonwebtoken');
 const fetchuser = require('../middleware/fetchuser');
 const User = require("../models/User");
 const Notification = require("../models/Notification");
-const mongoose = require("mongoose");
+
 //const Notification = require("../models/Notification");
 require('dotenv').config({ path: '.env.local' });
 const JWT_SECRET = process.env.JWT_SECRET;
@@ -464,6 +464,38 @@ module.exports = (io) => {
 			res.status(500).send('Server Error');
 		}
 	});
+
+	//remove friend
+	router.post('/removefriends/:toRemoveId', fetchuser, async (req, res) => {
+		try {
+			const userId = req.user.id;
+			const toRemoveId = req.params.toRemoveId;
+
+			const toRemove = await User.findById(toRemoveId);
+			const user = await User.findById(userId);
+
+			if (!toRemove || !user) {
+				return res.status(404).json({ error: 'User not found' });
+			}
+
+			// Fix comparison here
+			if (!user.friends.map(id => id.toString()).includes(toRemoveId)) {
+				return res.status(400).json({ error: 'Not a friend' });
+			}
+
+			user.friends = user.friends.filter(id => id.toString() !== toRemoveId);
+			await user.save();
+
+			toRemove.friends = (toRemove.friends || []).filter(id => id.toString() !== userId);
+			await toRemove.save();
+
+			res.json({ success: true, message: 'Removed from friend list' });
+		} catch (error) {
+			console.error(error.message);
+			res.status(500).send('Internal server error');
+		}
+	});
+
 
 
 	return router;
