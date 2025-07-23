@@ -15,7 +15,7 @@ connectToMongo();
 // Middleware
 app.use(cors({
   origin: ['http://localhost:3000', 
-     'https://lilyapper-because-silence-is-boring.onrender.com'
+     'https://lilyapper.onrender.com'
     ],
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
   credentials: true
