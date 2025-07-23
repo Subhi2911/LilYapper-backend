@@ -449,7 +449,7 @@ module.exports = (io) => {
                     _id: chat._id,
                     isGroupChat: false,
                     username: otherUser.username,
-                    avatar: otherUser.avatar || "/avatars/default.png",
+                    avatar: otherUser.avatar || "/avatars/laughing.png",
                     bio: otherUser.bio,
                     date: otherUser.date,
                     otherUserId: otherUser._id,
