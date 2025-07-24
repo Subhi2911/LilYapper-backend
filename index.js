@@ -14,9 +14,9 @@ connectToMongo();
 
 // Middleware
 app.use(cors({
-  origin: ['http://localhost:3000', 
-     'https://lilyapper.onrender.com'
-    ],
+  origin: ['http://localhost:3000',
+    'https://lilyapper.onrender.com'
+  ],
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
   credentials: true
 }));
@@ -31,8 +31,8 @@ const server = http.createServer(app);
 // Socket.IO setup
 const io = new Server(server, {
   cors: {
-    origin:  ['http://localhost:3000', 
-     'https://lilyapper.onrender.com'
+    origin: ['http://localhost:3000',
+      'https://lilyapper.onrender.com'
     ],
     methods: ['GET', 'POST', 'PUT', 'DELETE'],
     credentials: true,
@@ -68,8 +68,13 @@ io.on('connection', (socket) => {
     socket.join(room);
   });
 
-  socket.on('typing', (room) => socket.to(room).emit('typing'));
-  socket.on('stop typing', (room) => socket.to(room).emit('stop typing'));
+  socket.on('typing', ({ chatId, userId }) => {
+    socket.in(chatId).emit('typing', { chatId, userId });
+  });
+
+  socket.on('stop typing', ({ chatId, userId }) => {
+    socket.in(chatId).emit('stop typing', { chatId, userId });
+  });
 
   socket.on('send-message', (message) => {
     const chat = message.chat;
