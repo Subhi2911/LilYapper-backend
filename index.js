@@ -68,20 +68,20 @@ io.on('connection', (socket) => {
     socket.join(room);
   });
 
-  socket.on('typing', (chatId) => {
+  socket.on('typing', ({ chatId }) => {
+    // Emit to others in the chat room with chatId and userId
     socket.to(chatId).emit('typing', {
       chatId,
-      user: socket.user.id,
+      user: userId,
     });
   });
 
-  socket.on('stop typing', (chatId) => {
+  socket.on('stop typing', ({ chatId }) => {
     socket.to(chatId).emit('stop typing', {
       chatId,
-      user: socket.user.id,
+      user: userId,
     });
   });
-
 
   socket.on('send-message', (message) => {
     const chat = message.chat;
