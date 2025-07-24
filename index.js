@@ -71,13 +71,13 @@ io.on('connection', (socket) => {
   socket.on('typing', (room) => socket.to(room).emit('typing'));
   socket.on('stop typing', (room) => socket.to(room).emit('stop typing'));
 
-  socket.on('new message', (message) => {
+  socket.on('send-message', (message) => {
     const chat = message.chat;
     if (!chat?.users) return;
 
     chat.users.forEach((user) => {
-      if (user._id !== socket.user.id) {
-        socket.to(user._id).emit('message received', message);
+      if (user._id !== userId) {
+        io.to(user._id).emit('newMessage', message);  // send only to other users
       }
     });
   });
