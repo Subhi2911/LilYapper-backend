@@ -92,7 +92,25 @@ io.on('connection', (socket) => {
         io.to(user._id).emit('newMessage', message);  // send only to other users
       }
     });
+    chat.users.forEach((user) => {
+      if (user._id !== userId) {
+        io.to(user._id).emit('unread-message', {
+          chatId: chat._id,
+          unreadCount: 1, // Or fetch current count from DB
+        });
+      }
+    });
+
   });
+  socket.on('mark-read', ({ chatId }) => {
+    const userId = socket.user.id;
+
+    socket.to(chatId).emit('chat-read', {
+      chatId,
+      userId,
+    });
+  });
+
 
   socket.on('disconnect', () => {
     console.log('User disconnected:', userId);

@@ -151,6 +151,7 @@ module.exports = (io) => {
                         type: 'group_added',
                         message: `You were added to the group ${group.chatName}`,
                         groupId: group._id,
+                        senderUsername: currentUser.username
                     });
                 }
             });
@@ -502,7 +503,7 @@ module.exports = (io) => {
                     chat.latestMessage.content = decrypt(chat.latestMessage.content);
                 }
 
-                // 🔴 Count unread messages
+                // Count unread messages
                 const unreadCount = await Message.countDocuments({
                     chat: chat._id,
                     sender: { $ne: req.user._id },

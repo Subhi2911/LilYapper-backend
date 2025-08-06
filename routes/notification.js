@@ -8,7 +8,10 @@ require('dotenv').config({ path: '.env.local' });
 router.get('/notifications', fetchuser, async (req, res) => {
   try {
     const notifications = await Notification.find({ recipientId: req.user.id }).sort({ createdAt: -1 });
-    res.json(notifications);
+    res.json({
+      success: true, 
+      notifications  
+    });
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch notifications' });
   }

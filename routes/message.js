@@ -4,6 +4,7 @@ const { body, validationResult } = require('express-validator');
 const Message = require('../models/Message');
 const Chat = require('../models/Chat');
 const { encrypt, decrypt } = require('../utils/encryption');
+const User = require('../models/User');
 
 module.exports = (io) => {
   const router = express.Router();
@@ -57,10 +58,18 @@ module.exports = (io) => {
 
         const newMessage = new Message(newMessageData);
         const savedMessage = await newMessage.save();
-
+        const sender = await User.findById(req.user.id);
         // Fetch full message with nested populate for replyTo
         const fullMessage = await Message.findById(savedMessage._id)
           .populate('sender', 'username avatar')
+          .populate({
+            path: "chat",
+            select: "isGroupChat chatName users groupAdmin", // add any other fields you need
+            populate: {
+              path: "users",
+              select: "username avatar"
+            }
+          })
           .populate({
             path: 'replyTo',
             populate: [
@@ -81,12 +90,15 @@ module.exports = (io) => {
         await chat.save();
 
         // Emit to other users
+
         chat.users.forEach(user => {
           if (user._id.toString() !== req.user.id) {
             io.to(user._id.toString()).emit('newMessage', decryptedMessage);
             io.to(user._id.toString()).emit('notification', {
+              type: 'message',
               chatId,
               senderId: req.user.id,
+              senderUsername: sender.username,
               message: decryptedMessage.content,
             });
           }
