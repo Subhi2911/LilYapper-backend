@@ -85,23 +85,25 @@ io.on('connection', (socket) => {
 
   socket.on('send-message', (message) => {
     const chat = message.chat;
-    if (!chat?.users) return;
-
-    chat.users.forEach((user) => {
-      if (user._id !== userId) {
-        io.to(user._id).emit('newMessage', message);  // send only to other users
-      }
-    });
-    chat.users.forEach((user) => {
-      if (user._id !== userId) {
-        io.to(user._id).emit('unread-message', {
-          chatId: chat._id,
-          unreadCount: 1, // Or fetch current count from DB
-        });
-      }
-    });
-
+    console.log(message)
+    if (!message?.isSystem) {
+      // broadcast system message to all users in chat
+      if (!chat?.users) return;
+      const senderId = message.sender?._id;
+      chat.users.forEach((user) => {
+        if (user._id.toString() !== senderId?.toString()) {
+          io.to(user._id.toString()).emit('newMessage', message);
+        }
+      });
+    } else {
+      if (!message?.users) return;
+      console.log(message)
+      chat.users.forEach((user) => {
+        io.to(user._id.toString()).emit('newMessage', message);
+      });
+    }
   });
+
   socket.on('mark-read', ({ chatId }) => {
     const userId = socket.user.id;
 

@@ -118,8 +118,27 @@ module.exports = (io) => {
   // Fetch messages (decrypted)
   router.get('/:chatId', fetchuser, async (req, res) => {
     try {
-      // Fetch messages with populated sender and replyTo
-      const messages = await Message.find({ chat: req.params.chatId })
+      const chatId = req.params.chatId;
+
+      // Find chat to get joinedAt for the current user
+      const chat = await Chat.findById(chatId).lean();
+      if (!chat) {
+        return res.status(404).json({ error: 'Chat not found' });
+      }
+
+      const member = chat.members?.find(
+        m => m.userId.toString() === req.user.id
+      );
+
+      if (!member) {
+        return res.status(403).json([]); // Return empty array instead of object
+      }
+
+      // Fetch only messages after the user's join date
+      const messages = await Message.find({
+        chat: chatId,
+        createdAt: { $gte: member.joinedAt }
+      })
         .populate('sender', 'username avatar')
         .populate({
           path: 'replyTo',
@@ -127,10 +146,11 @@ module.exports = (io) => {
         })
         .sort({ createdAt: 1 });
 
-      // Mark as read as before...
+      // Mark as read (only the filtered messages)
       await Message.updateMany(
         {
-          chat: req.params.chatId,
+          chat: chatId,
+          createdAt: { $gte: member.joinedAt },
           sender: { $ne: req.user.id },
           readBy: { $ne: req.user.id }
         },
@@ -141,11 +161,13 @@ module.exports = (io) => {
       const decryptedMessages = messages.map(decryptMessage);
 
       res.json(decryptedMessages);
+
     } catch (error) {
       console.error(error);
       res.status(500).json({ error: 'Internal server error' });
     }
   });
+
   //mark as read
   router.put('/markRead/:chatId', fetchuser, async (req, res) => {
     try {
@@ -165,6 +187,7 @@ module.exports = (io) => {
     }
   });
 
+  //delete message
   router.delete('/delete/:id', fetchuser, async (req, res) => {
     try {
       const messageId = req.params.id;
@@ -189,6 +212,7 @@ module.exports = (io) => {
     }
   });
 
+  //edit message
   router.put('/edit/:id', async (req, res) => {
     try {
       const messageId = req.params.id;

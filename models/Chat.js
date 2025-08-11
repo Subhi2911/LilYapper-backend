@@ -14,10 +14,12 @@ const chatSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "Message",
     },
-    groupAdmin: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
-    },
+    groupAdmin: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "User",
+      }
+    ],
     deletedFor: [{
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User'
@@ -32,10 +34,17 @@ const chatSchema = new mongoose.Schema(
       default: '/avatars/hugging.png', // optional default
     }],
     wallpaper: {
-      url: { type: String, required: true, default:'/wallpapers/ChatBg.png' },
-      senderbubble: { type: String , default:'#52357B'},
-      receiverbubble:{ type: String, default:'white'},
+      url: { type: String, required: true, default: '/wallpapers/ChatBg.png' },
+      senderbubble: { type: String, default: '#52357B' },
+      receiverbubble: { type: String, default: 'white' },
     },
+    members: [
+      {
+        userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+        joinedAt: { type: Date, default: Date.now }
+      }
+    ]
+
   },
   { timestamps: true }
 );

@@ -47,10 +47,16 @@ module.exports = (io) => {
                 }
 
                 // Create new chat
+                const joinedAtNow = new Date();
+
                 const newChat = await Chat.create({
                     chatName: 'sender',
                     isGroupChat: false,
                     users: [currentUserId, receiverId],
+                    members: [
+                        { userId: currentUserId, joinedAt: joinedAtNow },
+                        { userId: receiverId, joinedAt: joinedAtNow }
+                    ],
                     deletedFor: []
                 });
 
@@ -132,15 +138,25 @@ module.exports = (io) => {
                 return res.status(404).json({ error: "One or more userIds do not exist." });
             }
 
+            const joinedAtNow = new Date();
+
             const group = await Chat.create({
                 chatName,
                 isGroupChat: true,
                 users: [...userIds, currentUserId],
+                members: [...userIds, currentUserId].map(uid => ({
+                    userId: uid,
+                    joinedAt: joinedAtNow
+                })),
                 groupAdmin: currentUserId,
                 deletedFor: [],
                 avatar: avatar || '/avatars/hugging.png',
+                permissions: {
+                    rename: 'admin',
+                    addUser: 'admin',
+                    removeUser: 'admin'
+                }
             });
-
             const fullChat = await Chat.findById(group._id)
                 .populate('users', '-password')
                 .populate('groupAdmin', '-password');
@@ -212,29 +228,48 @@ module.exports = (io) => {
         const { userIds } = req.body;
 
         try {
+            // Fetch the group first
             const chat = await Chat.findById(req.params.id);
             if (!chat) {
                 return res.status(404).json({ error: "Group not found" });
             }
 
             // Check permissions
-            if (chat.permissions.addUser === 'admin' && req.user.id !== chat.groupAdmin.toString()) {
+            if (chat.permissions.addUser === 'admin' && !chat.groupAdmin.some(adminId => adminId.toString() === req.user.id)) {
                 return res.status(403).json({ error: 'Only admin can add users' });
             }
+
             if (chat.permissions.addUser === 'all' && !chat.users.includes(req.user.id)) {
                 return res.status(403).json({ error: 'You are not a member of this group' });
             }
 
+            // Check friendship
             const currentUser = await User.findById(req.user.id);
             const notFriends = userIds.filter(id => !currentUser.friends.includes(id));
             if (notFriends.length > 0) {
                 return res.status(403).json({ error: "All users must be your friends." });
             }
 
+            // Filter out any users already in members
+            const existingMemberIds = chat.members.map(m => m.userId.toString());
+            const newJoinData = userIds
+                .filter(id => !existingMemberIds.includes(id)) // skip existing members
+                .map(id => ({
+                    userId: id,
+                    joinedAt: new Date()
+                }));
+
+            // If no one new to add
+            if (newJoinData.length === 0) {
+                return res.status(400).json({ error: "All provided users are already members." });
+            }
             // Add users to group
             const updatedChat = await Chat.findByIdAndUpdate(
                 req.params.id,
-                { $addToSet: { users: { $each: userIds } } },
+                {
+                    $addToSet: { users: { $each: userIds } },
+                    $push: { members: { $each: newJoinData } }
+                },
                 { new: true }
             ).populate('users', '-password');
 
@@ -244,19 +279,29 @@ module.exports = (io) => {
             const adderUsername = currentUser.username;
 
             const systemMessage = new Message({
-                chat: req.params.id,
                 sender: null,
                 content: `${adderUsername} added ${addedUsernames} to the group`,
-                isSystem: true
+                isSystem: true, 
             });
 
             await systemMessage.save();
 
+            const populatedSystemMessage = await Message.findById(systemMessage._id).populate({
+            path: "chat",
+            select: "isGroupChat chatName users groupAdmin ", // add any other fields you need
+            populate: {
+              path: "users",
+              select: "username avatar"
+            }
+          });
+
             res.json({
                 message: 'Users added to group',
+                isSystem:true,
                 users: updatedChat.users,
-                systemMessage
+                populatedSystemMessage
             });
+
 
         } catch (error) {
             console.error(error.message);
@@ -278,47 +323,65 @@ module.exports = (io) => {
             const chat = await Chat.findById(req.params.id);
             if (!chat) return res.status(404).json({ error: "Group not found" });
 
-            // Check permissions
-            if (chat.permissions.removeUser === 'admin' && req.user.id !== chat.groupAdmin.toString()) {
+            // Permission checks
+            if (chat.permissions.removeUser === 'admin' && !chat.groupAdmin.some(adminId => adminId.toString() === req.user.id)) {
                 return res.status(403).json({ error: 'Only admin can remove users' });
             }
+
             if (chat.permissions.removeUser === 'all' && !chat.users.includes(req.user.id)) {
                 return res.status(403).json({ error: 'You are not a member of this group' });
             }
 
-            // Remove users
+            // Remove users from `users`
             chat.users = chat.users.filter(id => !userIds.includes(id.toString()));
 
-            // Reassign admin if needed
-            const adminId = chat.groupAdmin.toString();
-            const removedAdmin = userIds.includes(adminId);
+            // Remove users from `members`
+            chat.members = chat.members.filter(m => !userIds.includes(m.userId.toString()));
 
-            if (removedAdmin) {
+            // Track admin count before removal
+            const previousAdminCount = chat.groupAdmin.length;
+
+            // Remove removed users from groupAdmin
+            chat.groupAdmin = chat.groupAdmin.filter(adminId => !userIds.includes(adminId.toString()));
+
+            // If exactly one admin before and now none, assign a random admin
+            if (previousAdminCount === 1 && chat.groupAdmin.length === 0) {
                 if (chat.users.length > 0) {
                     const randomIndex = Math.floor(Math.random() * chat.users.length);
-                    chat.groupAdmin = chat.users[randomIndex];
+                    chat.groupAdmin = [chat.users[randomIndex]];
                 } else {
-                    chat.groupAdmin = null;
+                    chat.groupAdmin = [];
                 }
             }
 
-            // SYSTEM MESSAGE
+            // Create SYSTEM MESSAGE
             const removedUsers = await User.find({ _id: { $in: userIds } });
-            const remover = await User.findById(req.user.id);
+            const removedUsernames = removedUsers.map(u => u.username).join(', ');
+            console.log(removedUsers)
 
-            const systemMessage = new Message({
-                chat: chat._id,
-                content: `${removedUsers.map(u => u.username).join(', ')} was removed from the group by ${remover.username}`,
-                isSystem: true,
+             const systemMessage = new Message({
+                sender: null,
+                content: `${removedUsernames} was removed from the group`,
+                isSystem: true, 
             });
 
             await systemMessage.save();
+
+            const populatedSystemMessage = await Message.findById(systemMessage._id).populate({
+            path: "chat",
+            select: "isGroupChat chatName users groupAdmin", // add any other fields you need
+            populate: {
+              path: "users",
+              select: "username avatar"
+            }
+          });
             await chat.save();
 
             res.json({
                 message: 'Users removed successfully.',
+                isSystem:true,
                 newAdmin: chat.groupAdmin,
-                systemMessage,
+                populatedSystemMessage,
             });
 
         } catch (error) {
@@ -411,7 +474,7 @@ module.exports = (io) => {
         }
     });
 
-
+    //get private chats
     router.get('/connections', fetchuser, async (req, res) => {
         try {
             const chats = await Chat.find({
@@ -486,6 +549,7 @@ module.exports = (io) => {
                 .populate('users', 'username avatar bio')
                 .populate('groupAdmin', 'username avatar')
                 .populate('wallpaper')
+                .populate('permissions')
                 .populate('latestMessage')
                 .populate({
                     path: 'latestMessage',
@@ -498,10 +562,12 @@ module.exports = (io) => {
                 .skip((page - 1) * limit)
                 .limit(limit);
 
+
             const formattedGroups = await Promise.all(groups.map(async (chat) => {
                 if (chat.latestMessage?.content) {
                     chat.latestMessage.content = decrypt(chat.latestMessage.content);
                 }
+
 
                 // Count unread messages
                 const unreadCount = await Message.countDocuments({
@@ -518,6 +584,7 @@ module.exports = (io) => {
                     groupAdmin: chat.groupAdmin,
                     latestMessage: chat.latestMessage || null,
                     isGroupChat: true,
+                    permissions: chat.permissions,
                     unreadCount
                 };
             }));
@@ -579,6 +646,42 @@ module.exports = (io) => {
             console.log(req.body)
             console.error(err);
             res.status(500).json({ error: 'Server error' });
+        }
+    });
+
+
+    // make another user admin
+    router.put('/chats/:chatId/make-admin/:userId', fetchuser, async (req, res) => {
+        try {
+            const { chatId, userId } = req.params;
+            const userRequesting = req.user.id; // logged-in user ID
+
+            const chat = await Chat.findById(chatId);
+            if (!chat) return res.status(404).json({ error: 'Chat not found' });
+
+            // Only existing admins can add new admins
+            if (!chat.groupAdmin.some(adminId => adminId.toString() === userRequesting)) {
+                return res.status(403).json({ error: 'Only admins can make other users admins' });
+            }
+
+            // Check if userId is in the group members
+            if (!chat.users.some(u => u.toString() === userId)) {
+                return res.status(400).json({ error: 'User is not a member of this group' });
+            }
+
+            // If user is already admin
+            if (chat.groupAdmin.some(adminId => adminId.toString() === userId)) {
+                return res.status(400).json({ error: 'User is already an admin' });
+            }
+
+            // Add userId to admins
+            chat.groupAdmin.push(userId);
+            await chat.save();
+
+            res.json({ message: 'User promoted to admin', groupAdmin: chat.groupAdmin });
+        } catch (error) {
+            console.error(error);
+            res.status(500).json({ error: 'Internal server error' });
         }
     });
 
