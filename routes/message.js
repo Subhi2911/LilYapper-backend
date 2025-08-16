@@ -59,6 +59,7 @@ module.exports = (io) => {
         const newMessage = new Message(newMessageData);
         const savedMessage = await newMessage.save();
         const sender = await User.findById(req.user.id);
+
         // Fetch full message with nested populate for replyTo
         const fullMessage = await Message.findById(savedMessage._id)
           .populate('sender', 'username avatar')
@@ -86,6 +87,12 @@ module.exports = (io) => {
 
         // Update chat latestMessage
         const chat = await Chat.findById(chatId).populate('users', '_id');
+
+        // Clear deletedFor array when a new message is sent
+        if (chat.deletedFor && chat.deletedFor.length > 0) {
+          chat.deletedFor = [];
+        }
+
         chat.latestMessage = fullMessage._id;
         await chat.save();
 

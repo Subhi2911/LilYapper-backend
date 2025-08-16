@@ -5,6 +5,7 @@ const connectToMongo = require('./db');
 const http = require('http');
 const jwt = require('jsonwebtoken');
 const { Server } = require('socket.io');
+const Chat = require('./models/Chat');
 
 const app = express();
 const port = 5000;
@@ -83,26 +84,66 @@ io.on('connection', (socket) => {
     });
   });
 
+  socket.on('change-wallpaper', async ({ _id, chatId, username, wallpaperData }) => {
+    try {
+      console.log(chatId, username, wallpaperData)
+      // Update chat wallpaper in DB
+      const chat = await Chat.findById(chatId);
+      if (!chat) {
+        return socket.emit('error', 'Chat not found');
+      }
+
+      chat.wallpaper = wallpaperData;
+      await chat.save();
+
+      // Broadcast to all in chat room
+      io.to(chatId).emit('wallpaper-updated', {
+        chatId,
+        newWallpaper: chat.wallpaper,
+      });
+      io.to(chatId).emit('newMessage', {
+        _id: _id,
+        isSystem: true,
+        content: `🖼️${username} changed the wallpaper`,
+        chat: chatId,
+        users: chat.users
+      });
+
+      // Optionally send system message or any other info
+    } catch (err) {
+      console.error(err);
+      socket.emit('error', 'Failed to change wallpaper');
+    }
+  });
+
   socket.on('send-message', (message) => {
     const chat = message.chat;
-    console.log(message)
+    console.log('ff ', message);
+
     if (!message?.isSystem) {
-      // broadcast system message to all users in chat
-      if (!chat?.users) return;
+      if (!chat?.users) return; // Prevent crash if no users array
+      console.log('normal')
+      // Normal message: send to all except sender
       const senderId = message.sender?._id;
       chat.users.forEach((user) => {
-        if (user._id.toString() !== senderId?.toString()) {
-          io.to(user._id.toString()).emit('newMessage', message);
+        const userId = typeof user === 'string' ? user : user._id;
+        if (!userId) return;
+        if (userId.toString() !== senderId?.toString()) {
+          io.to(userId.toString()).emit('newMessage', message);
         }
       });
     } else {
-      if (!message?.users) return;
-      console.log(message)
-      chat.users.forEach((user) => {
-        io.to(user._id.toString()).emit('newMessage', message);
+      if (!message?.users) return; // Prevent crash if no users array
+      console.log('system')
+      // System message: send to all
+      message.users.forEach((user) => {
+        const userId = typeof user === 'string' ? user : user._id;
+        if (!userId) return;
+        io.to(userId.toString()).emit('newMessage', message);
       });
     }
   });
+
 
   socket.on('mark-read', ({ chatId }) => {
     const userId = socket.user.id;

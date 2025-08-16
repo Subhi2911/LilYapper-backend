@@ -204,9 +204,38 @@ module.exports = (io) => {
             }
 
             chat.chatName = chatName;
+
+            const currentUser = await User.findById(req.user.id);
+
+            const systemMessage = new Message({
+                sender: null,
+                content: `${currentUser.username} changed the group name to ${chat.chatName}`,
+                isSystem: true,
+                chat: chat._id
+            });
+
+            await systemMessage.save();
+
+            const populatedSystemMessage = await Message.findById(systemMessage._id).populate({
+                path: "chat",
+                select: "isGroupChat chatName users groupAdmin ", // add any other fields you need
+                populate: {
+                    path: "users",
+                    select: "username avatar"
+                }
+            });
+
             await chat.save();
 
-            res.json({ chatName: chat.chatName });
+            res.json({ 
+                chatName: chat.chatName, 
+                message: `${currentUser.username} changed the group name to ${chat.chatName}`,
+                isSystem: true,
+                users: chat.users,
+                populatedSystemMessage,
+                chatId: chat._id,
+                chat: chat._id
+            });
         } catch (error) {
             res.status(500).send("Internal server error");
         }
@@ -281,25 +310,28 @@ module.exports = (io) => {
             const systemMessage = new Message({
                 sender: null,
                 content: `${adderUsername} added ${addedUsernames} to the group`,
-                isSystem: true, 
+                isSystem: true,
+                chat: chat._id
             });
 
             await systemMessage.save();
 
             const populatedSystemMessage = await Message.findById(systemMessage._id).populate({
-            path: "chat",
-            select: "isGroupChat chatName users groupAdmin ", // add any other fields you need
-            populate: {
-              path: "users",
-              select: "username avatar"
-            }
-          });
+                path: "chat",
+                select: "isGroupChat chatName users groupAdmin ", // add any other fields you need
+                populate: {
+                    path: "users",
+                    select: "username avatar"
+                }
+            });
 
             res.json({
                 message: 'Users added to group',
-                isSystem:true,
+                isSystem: true,
                 users: updatedChat.users,
-                populatedSystemMessage
+                populatedSystemMessage,
+                chatId: chat._id,
+                chat: chat._id
             });
 
 
@@ -359,29 +391,34 @@ module.exports = (io) => {
             const removedUsernames = removedUsers.map(u => u.username).join(', ');
             console.log(removedUsers)
 
-             const systemMessage = new Message({
+            const systemMessage = new Message({
                 sender: null,
                 content: `${removedUsernames} was removed from the group`,
-                isSystem: true, 
+                isSystem: true,
+                chat: chat._id
             });
 
             await systemMessage.save();
+            await chat.populate('users', '_id username avatar');
 
             const populatedSystemMessage = await Message.findById(systemMessage._id).populate({
-            path: "chat",
-            select: "isGroupChat chatName users groupAdmin", // add any other fields you need
-            populate: {
-              path: "users",
-              select: "username avatar"
-            }
-          });
+                path: "chat",
+                select: "isGroupChat chatName users groupAdmin", // add any other fields you need
+                populate: {
+                    path: "users",
+                    select: "username avatar"
+                }
+            });
             await chat.save();
 
             res.json({
                 message: 'Users removed successfully.',
-                isSystem:true,
+                isSystem: true,
                 newAdmin: chat.groupAdmin,
                 populatedSystemMessage,
+                chatId: chat._id,
+                users: chat.users,
+                chat: chat._id
             });
 
         } catch (error) {
@@ -411,10 +448,19 @@ module.exports = (io) => {
 
             if (!chat.deletedFor.includes(userId)) {
                 chat.deletedFor.push(userId);
+
+                // Update joinedAt for this user in members array
+                const memberIndex = chat.members.findIndex(
+                    (m) => m.userId.toString() === userId
+                );
+                if (memberIndex !== -1) {
+                    chat.members[memberIndex].joinedAt = new Date();
+                }
+
                 await chat.save();
             }
 
-            res.json({ message: 'Chat deleted for you' });
+            res.json({ message: 'Chat deleted for you, joinedAt updated' });
         } catch (error) {
             console.error(error.message);
             res.status(500).send('Internal server error');
@@ -585,6 +631,7 @@ module.exports = (io) => {
                     latestMessage: chat.latestMessage || null,
                     isGroupChat: true,
                     permissions: chat.permissions,
+                    wallpaper: chat.wallpaper,
                     unreadCount
                 };
             }));
@@ -609,7 +656,7 @@ module.exports = (io) => {
     // PUT /api/chat/:chatId/wallpaper
     router.put('/:chatId/wallpaper', fetchuser, async (req, res) => {
         try {
-            const { url, senderbubble, receiverbubble } = req.body;
+            const { url, senderbubble, receiverbubble, rMesColor, sMesColor, systemMesColor, iColor } = req.body;
 
             const chat = await Chat.findById(req.params.chatId);
 
@@ -624,8 +671,19 @@ module.exports = (io) => {
                 url,
                 senderbubble,
                 receiverbubble,
+                rMesColor,
+                sMesColor,
+                systemMesColor,
+                iColor
             };
+
             await chat.save();
+
+            // Emit wallpaper update to all users in the chat room
+            io.to(chat._id.toString()).emit('wallpaper-updated', {
+                chatId: chat._id.toString(),
+                newWallpaper: chat.wallpaper,
+            });
 
             // Send system message
             const user = await User.findById(req.user.id);
@@ -641,7 +699,8 @@ module.exports = (io) => {
             chat.latestMessage = systemMsg._id;
             await chat.save();
 
-            res.json({ success: true, wallpaper: chat.wallpaper });
+            res.json({ success: true, username: user.username, _id: systemMsg._id, wallpaper: chat.wallpaper });
+            console.log(res)
         } catch (err) {
             console.log(req.body)
             console.error(err);
@@ -684,6 +743,8 @@ module.exports = (io) => {
             res.status(500).json({ error: 'Internal server error' });
         }
     });
+    
+    
 
     return router;
 };
