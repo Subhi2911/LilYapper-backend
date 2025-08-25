@@ -25,14 +25,15 @@ const chatSchema = new mongoose.Schema(
       ref: 'User'
     }],
     permissions: {
+      groupAvatar: { type: String, enum: ['admin', 'all'], default: 'admin' },
       rename: { type: String, enum: ['admin', 'all'], default: 'admin' },
       addUser: { type: String, enum: ['admin', 'all'], default: 'admin' },
       removeUser: { type: String, enum: ['admin', 'all'], default: 'admin' }
     },
-    avatar: [{
+    avatar: {
       type: String,
       default: '/avatars/hugging.png', // optional default
-    }],
+    },
     wallpaper: {
       url: { type: String, required: true, default: '/wallpapers/ChatBg.png' },
       senderbubble: { type: String, default: '#52357B' },

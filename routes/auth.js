@@ -7,6 +7,8 @@ const jwt = require('jsonwebtoken');
 const fetchuser = require('../middleware/fetchuser');
 const User = require("../models/User");
 const Notification = require("../models/Notification");
+const Chat = require("../models/Chat");
+const sendEmail = require("../utils/sendEmail");
 
 //const Notification = require("../models/Notification");
 require('dotenv').config({ path: '.env.local' });
@@ -496,6 +498,106 @@ module.exports = (io) => {
 		}
 	});
 
+	//signout
+	// DELETE /api/auth/delete
+	router.delete('/delete', fetchuser, async (req, res) => {
+		try {
+			const userId = req.user.id;
+
+			// Optional: Remove user from chats
+			await Chat.updateMany(
+				{ users: userId },
+				{ $pull: { users: userId, groupAdmin: userId } }
+			);
+
+			// Delete user
+			await User.findByIdAndDelete(userId);
+
+			res.json({ message: 'Your account has been deleted successfully.' });
+		} catch (err) {
+			console.error(err);
+			res.status(500).json({ error: 'Internal server error' });
+		}
+	});
+
+	// PUT /api/user/change-password
+	router.put('/change-password', fetchuser, async (req, res) => {
+		const userId = req.user.id; // assuming verifyToken sets req.user
+		const { oldPassword, newPassword } = req.body;
+
+		try {
+			const user = await User.findById(userId);
+			if (!user) return res.status(404).json({ error: 'User not found' });
+
+			// Check old password
+			const isMatch = await bcrypt.compare(oldPassword, user.password);
+			if (!isMatch) return res.status(400).json({ error: 'Old password is incorrect' });
+
+			// Hash new password
+			const salt = await bcrypt.genSalt(10);
+			user.password = await bcrypt.hash(newPassword, salt);
+
+			await user.save();
+			res.json({ message: 'Password changed successfully' });
+		} catch (err) {
+			console.error(err);
+			res.status(500).json({ error: 'Server error' });
+		}
+	});
+
+	// Step 1: Send OTP
+	router.post('/forgot-password', async (req, res) => {
+		const { email } = req.body;
+		const user = await User.findOne({ email });
+		if (!user) return res.status(404).json({ error: "User not found" });
+
+		const otp = Math.floor(100000 + Math.random() * 900000).toString(); // 6-digit OTP
+		const otpExpiry = Date.now() + 10 * 60 * 1000; // 10 minutes expiry
+
+		user.otp = otp;
+		user.otpExpiry = otpExpiry;
+		await user.save();
+
+		await sendEmail(user.email, "Your OTP Code", `Your OTP is: ${otp}`);
+
+		res.json({ message: "OTP sent to your email" });
+	});
+
+	// Step 2: Verify OTP
+	router.post('/verify-otp', async (req, res) => {
+		const { email, otp } = req.body;
+		const user = await User.findOne({ email });
+		if (!user) return res.status(404).json({ error: "User not found" });
+		if (user.otp !== otp || user.otpExpiry < Date.now()) {
+			return res.status(400).json({ error: "Invalid or expired OTP" });
+		}
+
+		user.otpVerified = true;
+		await user.save();
+
+		res.json({ message: "OTP verified" });
+
+	});
+
+	// Step 3: Reset Password
+	router.put('/reset-password', async (req, res) => {
+		const { email, newPassword } = req.body;
+		const user = await User.findOne({ email });
+		if (!user) return res.status(404).json({ error: "User not found" });
+		if (!user.otpVerified) {
+			return res.status(400).json({ error: "OTP not verified" });
+		}
+
+		const hashedPassword = await bcrypt.hash(newPassword, 10);
+		user.password = hashedPassword;
+		user.otp = null;
+		user.otpExpiry = null;
+		user.otpVerified = false; // reset flag
+		await user.save();
+
+
+		res.json({ message: "Password changed successfully!" });
+	});
 
 
 	return router;

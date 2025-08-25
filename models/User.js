@@ -39,7 +39,10 @@ const UserSchema = mongoose.Schema({
     friends: [{ 
         type: mongoose.Schema.Types.ObjectId, 
         ref: 'User' ,
-    }]
+    }],
+    otp: String,
+    otpExpiry: Date,
+    otpVerified: { type: Boolean, default: false } 
     
 })
 

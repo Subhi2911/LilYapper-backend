@@ -86,6 +86,7 @@ module.exports = (io) => {
         const decryptedMessage = decryptMessage(fullMessage);
 
         // Update chat latestMessage
+        // Update chat latestMessage
         const chat = await Chat.findById(chatId).populate('users', '_id');
 
         // Clear deletedFor array when a new message is sent
@@ -96,8 +97,13 @@ module.exports = (io) => {
         chat.latestMessage = fullMessage._id;
         await chat.save();
 
-        // Emit to other users
+        // 🔥 Repopulate latestMessage
+        await chat.populate({
+          path: 'latestMessage',
+          populate: { path: 'sender', select: 'username avatar email' }
+        });
 
+        // Emit to other users
         chat.users.forEach(user => {
           if (user._id.toString() !== req.user.id) {
             io.to(user._id.toString()).emit('newMessage', decryptedMessage);
@@ -112,6 +118,7 @@ module.exports = (io) => {
         });
 
         res.status(201).json(decryptedMessage);
+
       } catch (error) {
         console.error(error.message);
         res.status(500).json({ error: 'Internal server error' });
@@ -125,7 +132,11 @@ module.exports = (io) => {
   // Fetch messages (decrypted)
   router.get('/:chatId', fetchuser, async (req, res) => {
     try {
+      const { page = 1, limit = 10 } = req.query;
       const chatId = req.params.chatId;
+      if (!req.params.chatId) {
+        return res.status(400).json({ error: "chatId is required" });
+      }
 
       // Find chat to get joinedAt for the current user
       const chat = await Chat.findById(chatId).lean();
@@ -146,12 +157,16 @@ module.exports = (io) => {
         chat: chatId,
         createdAt: { $gte: member.joinedAt }
       })
-        .populate('sender', 'username avatar')
+        .populate("sender", "username avatar")
         .populate({
-          path: 'replyTo',
-          populate: { path: 'sender', select: 'username avatar' }
+          path: "replyTo",
+          populate: { path: "sender", select: "username avatar" }
         })
-        .sort({ createdAt: 1 });
+        .sort({ createdAt: -1 })        // newest → oldest
+        .skip((page - 1) * limit)
+        .limit(limit);
+
+
 
       // Mark as read (only the filtered messages)
       await Message.updateMany(
@@ -167,7 +182,7 @@ module.exports = (io) => {
       // Decrypt messages and nested replyTo messages recursively
       const decryptedMessages = messages.map(decryptMessage);
 
-      res.json(decryptedMessages);
+      res.json(decryptedMessages.reverse());
 
     } catch (error) {
       console.error(error);

@@ -29,24 +29,56 @@ module.exports = (io) => {
                     return res.status(403).json({ error: "You can only chat with approved users." });
                 }
 
-                // Check if chat already exists between these two users
+                // Check if chat already exists
                 let chat = await Chat.findOne({
                     isGroupChat: false,
-                    users: { $all: [currentUserId, receiverId] },
-                    deletedFor: { $ne: currentUserId }
+                    users: { $all: [currentUserId, receiverId] }
                 })
                     .populate('users', '-password')
                     .populate('latestMessage');
 
                 if (chat) {
+                    // If user had deleted it, restore instead of creating new
+                    if (chat.deletedFor.includes(currentUserId)) {
+                        chat.deletedFor = chat.deletedFor.filter(id => id.toString() !== currentUserId);
+                        await chat.save();
+                    }
+
+                    const otherUser = chat.users.find(
+                        user => user._id.toString() !== currentUserId
+                    );
+
                     chat = await User.populate(chat, {
                         path: 'latestMessage.sender',
                         select: 'username avatar email'
                     });
-                    return res.status(200).json(chat);
+
+                    const unreadCount = await Message.countDocuments({
+                        chat: chat._id,
+                        sender: { $ne: currentUserId },
+                        readBy: { $ne: currentUserId }
+                    });
+
+                    if (chat.latestMessage?.content) {
+                        chat.latestMessage.content = decrypt(chat.latestMessage.content);
+                    }
+
+                    return res.status(200).json({
+                        _id: chat._id,
+                        isGroupChat: false,
+                        username: otherUser.username,
+                        avatar: otherUser.avatar || "/avatars/laughing.png",
+                        bio: otherUser.bio,
+                        date: otherUser.date,
+                        otherUserId: otherUser._id,
+                        latestMessage: chat.latestMessage || null,
+                        wallpaper: chat.wallpaper,
+                        unreadCount
+                    });
                 }
 
-                // Create new chat
+
+                // If no chat found, create new chat
                 const joinedAtNow = new Date();
 
                 const newChat = await Chat.create({
@@ -60,8 +92,37 @@ module.exports = (io) => {
                     deletedFor: []
                 });
 
-                const fullChat = await Chat.findById(newChat._id).populate('users', '-password');
-                res.status(201).json(fullChat);
+                const fullChat = await Chat.findById(newChat._id)
+                    .populate('users', '-password')
+                    .populate('latestMessage');
+
+                const otherUser = fullChat.users.find(
+                    user => user._id.toString() !== currentUserId
+                );
+
+                const unreadCount = await Message.countDocuments({
+                    chat: fullChat._id,
+                    sender: { $ne: currentUserId },
+                    readBy: { $ne: currentUserId }
+                });
+
+                if (chat.latestMessage?.content) {
+                    chat.latestMessage.content = decrypt(chat.latestMessage.content);
+                }
+
+                return res.status(201).json({
+                    _id: fullChat._id,
+                    isGroupChat: false,
+                    username: otherUser.username,
+                    avatar: otherUser.avatar || "/avatars/laughing.png",
+                    bio: otherUser.bio,
+                    date: otherUser.date,
+                    otherUserId: otherUser._id,
+                    latestMessage: fullChat.latestMessage || null,
+                    wallpaper: fullChat.wallpaper,
+                    unreadCount
+                });
+
 
             } catch (error) {
                 console.error(error.message);
@@ -69,6 +130,7 @@ module.exports = (io) => {
             }
         }
     );
+
 
     // Route 2: Get all chats for logged in user
     router.get('/', fetchuser, async (req, res) => {
@@ -227,8 +289,8 @@ module.exports = (io) => {
 
             await chat.save();
 
-            res.json({ 
-                chatName: chat.chatName, 
+            res.json({
+                chatName: chat.chatName,
                 message: `${currentUser.username} changed the group name to ${chat.chatName}`,
                 isSystem: true,
                 users: chat.users,
@@ -512,9 +574,37 @@ module.exports = (io) => {
             }
 
             chat.permissions = { ...chat.permissions.toObject(), ...permissions };
+
+            const currentUser = await User.findById(req.user.id);
+
+            const systemMessage = new Message({
+                sender: null,
+                content: `${currentUser.username} updated the group permissions `,
+                isSystem: true,
+                chat: chat._id
+            });
+
+            await systemMessage.save();
+
+            const populatedSystemMessage = await Message.findById(systemMessage._id).populate({
+                path: "chat",
+                select: "isGroupChat chatName users groupAdmin ", // add any other fields you need
+                populate: {
+                    path: "users",
+                    select: "username avatar"
+                }
+            });
             await chat.save();
 
-            res.json({ message: 'Permissions updated', permissions: chat.permissions });
+            res.json({
+                message: 'Permissions updated',
+                isSystem: true,
+                users: chat.users,
+                populatedSystemMessage,
+                chatId: chat._id,
+                chat: chat._id,
+                permissions: chat.permissions
+            });
         } catch (error) {
             res.status(500).send("Internal server error");
         }
@@ -547,6 +637,8 @@ module.exports = (io) => {
                 const otherUser = chat.users.find(
                     user => user._id.toString() !== req.user._id.toString()
                 );
+
+                if (!otherUser) return null; // skip or handle chats with no other user
 
                 // Count unread messages
                 const unreadCount = await Message.countDocuments({
@@ -596,6 +688,7 @@ module.exports = (io) => {
                 .populate('groupAdmin', 'username avatar')
                 .populate('wallpaper')
                 .populate('permissions')
+                .populate('avatar')
                 .populate('latestMessage')
                 .populate({
                     path: 'latestMessage',
@@ -743,8 +836,64 @@ module.exports = (io) => {
             res.status(500).json({ error: 'Internal server error' });
         }
     });
-    
-    
+
+    // Update group avatar
+    router.put('/avatar/:chatId', fetchuser, async (req, res) => {
+        try {
+            const { chatId } = req.params;
+            const { avatar } = req.body; // base64 string or image URL
+
+            if (!avatar) {
+                return res.status(400).json({ error: 'Avatar is required' });
+            }
+
+            const chat = await Chat.findById(chatId);
+            if (!chat) {
+                return res.status(404).json({ error: 'Chat not found' });
+            }
+
+            if (!chat.isGroupChat) {
+                return res.status(400).json({ error: 'Not a group chat' });
+            }
+
+            chat.avatar = avatar;
+
+            // Send system message
+            const user = await User.findById(req.user.id);
+            const systemMessage = new Message({
+                sender: req.user.id,
+                chat: chat._id,
+                content: `🖼️ ${user.username} changed the group avatar.`,
+                isSystem: true,
+            });
+            await systemMessage.save();
+
+            const populatedSystemMessage = await Message.findById(systemMessage._id).populate({
+                path: "chat",
+                select: "isGroupChat chatName users groupAdmin ", // add any other fields you need
+                populate: {
+                    path: "users",
+                    select: "username avatar"
+                }
+            });
+
+            await chat.save();
+
+            res.json({
+                chatId: chat._id,
+                isSystem: true,
+                users: chat.users,
+                populatedSystemMessage,
+                chat: chat._id,
+                avatar: chat.avatar
+            });
+        } catch (err) {
+            console.error(err);
+            res.status(500).json({ error: 'Server error' });
+        }
+    });
+
+
 
     return router;
 };
