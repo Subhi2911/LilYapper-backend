@@ -15,7 +15,7 @@ connectToMongo();
 
 // Middleware
 app.use(cors({
-  origin: ['http://localhost:3000',
+  origin: [//'http://localhost:3000',
     'https://lilyapper.onrender.com'
   ],
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
@@ -32,7 +32,7 @@ const server = http.createServer(app);
 // Socket.IO setup
 const io = new Server(server, {
   cors: {
-    origin: ['http://localhost:3000',
+    origin: [//'http://localhost:3000',
       'https://lilyapper.onrender.com'
     ],
     methods: ['GET', 'POST', 'PUT', 'DELETE'],
