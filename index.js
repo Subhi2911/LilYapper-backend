@@ -84,9 +84,9 @@ io.on('connection', (socket) => {
     });
   });
 
-  socket.on('change-wallpaper', async ({ _id, chatId, username, wallpaperData }) => {
+  socket.on('change-wallpaper', async ({ _id, chatId, username, wallpaperData, chatData }) => {
     try {
-      console.log(chatId, username, wallpaperData)
+      console.log(chatId, username, wallpaperData, chatData)
       // Update chat wallpaper in DB
       const chat = await Chat.findById(chatId);
       if (!chat) {
@@ -101,13 +101,21 @@ io.on('connection', (socket) => {
         chatId,
         newWallpaper: chat.wallpaper,
       });
-      io.to(chatId).emit('newMessage', {
-        _id: _id,
+      const systemMsg = {
+        id:_id,
         isSystem: true,
         content: `🖼️${username} changed the wallpaper`,
         chat: chatId,
-        users: chat.users
+        users: chatData.users
+      };
+      // Emit to each user (same as send-message)
+      chat.users.forEach((user) => {
+        const userId = typeof user === "string" ? user : user._id;
+        if (userId) {
+          io.to(userId.toString()).emit("newMessage", systemMsg);
+        }
       });
+      console.log(systemMsg)
 
       // Optionally send system message or any other info
     } catch (err) {

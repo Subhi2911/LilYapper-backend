@@ -182,7 +182,7 @@ module.exports = (io) => {
       // Decrypt messages and nested replyTo messages recursively
       const decryptedMessages = messages.map(decryptMessage);
 
-      res.json(decryptedMessages.reverse());
+      res.json(decryptedMessages);
 
     } catch (error) {
       console.error(error);

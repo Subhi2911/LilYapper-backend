@@ -9,6 +9,7 @@ const User = require("../models/User");
 const Notification = require("../models/Notification");
 const Chat = require("../models/Chat");
 const sendEmail = require("../utils/sendEmail");
+let success = false;
 
 //const Notification = require("../models/Notification");
 require('dotenv').config({ path: '.env.local' });
@@ -85,7 +86,6 @@ module.exports = (io) => {
 
 			const passwordCompare = await bcrypt.compare(password, user.password);
 			if (!passwordCompare) {
-				console.log('user:', user);
 				return res.status(400).json({ success: false, error: "Invalid credentials" });
 			}
 
@@ -522,6 +522,7 @@ module.exports = (io) => {
 
 	// PUT /api/user/change-password
 	router.put('/change-password', fetchuser, async (req, res) => {
+		success = false;
 		const userId = req.user.id; // assuming verifyToken sets req.user
 		const { oldPassword, newPassword } = req.body;
 
@@ -538,67 +539,89 @@ module.exports = (io) => {
 			user.password = await bcrypt.hash(newPassword, salt);
 
 			await user.save();
-			res.json({ message: 'Password changed successfully' });
+			success = true;
+			res.json({ message: 'Password changed successfully', success: success });
 		} catch (err) {
 			console.error(err);
-			res.status(500).json({ error: 'Server error' });
+			res.status(500).json({ error: 'Failed to change password', success: success });
 		}
 	});
 
 	// Step 1: Send OTP
 	router.post('/forgot-password', async (req, res) => {
+		success = false;
 		const { email } = req.body;
 		const user = await User.findOne({ email });
-		if (!user) return res.status(404).json({ error: "User not found" });
+		if (!user) return res.status(404).json({ error: "User not found", success: success });
+		try {
+			const otp = Math.floor(100000 + Math.random() * 900000).toString(); // 6-digit OTP
+			const otpExpiry = Date.now() + 10 * 60 * 1000; // 10 minutes expiry
 
-		const otp = Math.floor(100000 + Math.random() * 900000).toString(); // 6-digit OTP
-		const otpExpiry = Date.now() + 10 * 60 * 1000; // 10 minutes expiry
+			user.otp = otp;
+			user.otpExpiry = otpExpiry;
+			await user.save();
 
-		user.otp = otp;
-		user.otpExpiry = otpExpiry;
-		await user.save();
+			await sendEmail(user.email, "Your OTP Code", `Your OTP is: ${otp}`);
+			success = true;
 
-		await sendEmail(user.email, "Your OTP Code", `Your OTP is: ${otp}`);
+			res.json({ message: "OTP sent to your email", success: success });
+		} catch (err) {
+			console.error(err);
+			res.status(500).json({ error: 'Internal Server Error', success: success });
+		}
 
-		res.json({ message: "OTP sent to your email" });
+
 	});
 
 	// Step 2: Verify OTP
 	router.post('/verify-otp', async (req, res) => {
+		success = false;
 		const { email, otp } = req.body;
-		const user = await User.findOne({ email });
-		if (!user) return res.status(404).json({ error: "User not found" });
-		if (user.otp !== otp || user.otpExpiry < Date.now()) {
-			return res.status(400).json({ error: "Invalid or expired OTP" });
+		try {
+			const user = await User.findOne({ email });
+			if (!user) return res.status(404).json({ error: "User not found" });
+			if (user.otp !== otp || user.otpExpiry < Date.now()) {
+				return res.status(400).json({ error: "Invalid or expired OTP" });
+			}
+
+			user.otpVerified = true;
+			await user.save();
+			success = true;
+			res.json({ message: "OTP verified", success: success });
+		} catch (err) {
+			console.error(err);
+			res.status(500).json({ error: 'Internal Server Error', success: success });
 		}
 
-		user.otpVerified = true;
-		await user.save();
-
-		res.json({ message: "OTP verified" });
 
 	});
 
 	// Step 3: Reset Password
 	router.put('/reset-password', async (req, res) => {
+		success = false;
 		const { email, newPassword } = req.body;
-		const user = await User.findOne({ email });
-		if (!user) return res.status(404).json({ error: "User not found" });
-		if (!user.otpVerified) {
-			return res.status(400).json({ error: "OTP not verified" });
+		try {
+			const user = await User.findOne({ email });
+			if (!user) return res.status(404).json({ error: "User not found" });
+			if (!user.otpVerified) {
+				return res.status(400).json({ error: "OTP not verified" });
+			}
+
+			const hashedPassword = await bcrypt.hash(newPassword, 10);
+			user.password = hashedPassword;
+			user.otp = null;
+			user.otpExpiry = null;
+			user.otpVerified = false; // reset flag
+			await user.save();
+
+			success = true;
+			res.json({ message: "Password changed successfully!", success: success });
+
+		} catch (err) {
+			console.error(err);
+			res.status(500).json({ error: 'Internal Server Error', success: success });
 		}
-
-		const hashedPassword = await bcrypt.hash(newPassword, 10);
-		user.password = hashedPassword;
-		user.otp = null;
-		user.otpExpiry = null;
-		user.otpVerified = false; // reset flag
-		await user.save();
-
-
-		res.json({ message: "Password changed successfully!" });
 	});
-
 
 	return router;
 };

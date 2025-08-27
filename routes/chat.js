@@ -451,7 +451,7 @@ module.exports = (io) => {
             // Create SYSTEM MESSAGE
             const removedUsers = await User.find({ _id: { $in: userIds } });
             const removedUsernames = removedUsers.map(u => u.username).join(', ');
-            console.log(removedUsers)
+
 
             const systemMessage = new Message({
                 sender: null,
@@ -492,8 +492,7 @@ module.exports = (io) => {
     // Route 7: Delete chat (soft delete for current user)
     router.delete('/deletechat/:chatId', fetchuser, async (req, res) => {
         try {
-            console.log('Reached DELETE /deletechat with ID:', req.params.chatId);
-            console.log('User ID from token:', req.user.id);
+
             const chatId = req.params.chatId;
             const userId = req.user.id;
 
@@ -752,27 +751,14 @@ module.exports = (io) => {
             const { url, senderbubble, receiverbubble, rMesColor, sMesColor, systemMesColor, iColor } = req.body;
 
             const chat = await Chat.findById(req.params.chatId);
-
             if (!chat) return res.status(404).json({ error: 'Chat not found' });
-
-            if (!chat.users.includes(req.user.id)) {
-                return res.status(403).json({ error: 'Unauthorized' });
-            }
+            if (!chat.users.includes(req.user.id)) return res.status(403).json({ error: 'Unauthorized' });
 
             // Update wallpaper
-            chat.wallpaper = {
-                url,
-                senderbubble,
-                receiverbubble,
-                rMesColor,
-                sMesColor,
-                systemMesColor,
-                iColor
-            };
-
+            chat.wallpaper = { url, senderbubble, receiverbubble, rMesColor, sMesColor, systemMesColor, iColor };
             await chat.save();
 
-            // Emit wallpaper update to all users in the chat room
+            // Emit wallpaper update
             io.to(chat._id.toString()).emit('wallpaper-updated', {
                 chatId: chat._id.toString(),
                 newWallpaper: chat.wallpaper,
@@ -792,14 +778,29 @@ module.exports = (io) => {
             chat.latestMessage = systemMsg._id;
             await chat.save();
 
-            res.json({ success: true, username: user.username, _id: systemMsg._id, wallpaper: chat.wallpaper });
-            console.log(res)
+            // 🔴 Emit the system message instantly
+            chat.users.forEach(u => {
+                const userId = typeof u === 'string' ? u : u._id;
+                if (userId) {
+                    io.to(userId.toString()).emit('newMessage', {
+                        _id: systemMsg._id,
+                        content: systemMsg.content,
+                        chat: chat._id,
+                        isSystem: true,
+                        sender: systemMsg.sender,
+                        createdAt: systemMsg.createdAt,
+                    });
+                }
+            });
+
+            res.json({ success: true, username: user.username, _id: systemMsg._id, wallpaper: chat.wallpaper, chat });
+
         } catch (err) {
-            console.log(req.body)
             console.error(err);
             res.status(500).json({ error: 'Server error' });
         }
     });
+
 
 
     // make another user admin
