@@ -623,6 +623,27 @@ module.exports = (io) => {
 		}
 	});
 
+	// get logged in user's friends
+	router.post('/getfriends/:userId',fetchuser, async (req, res) => {
+		try {
+			const { userId } = req.params;
+
+			const user = await User.findById(userId).populate({
+				path: 'friends',
+				select: 'avatar username bio', // only return these fields
+			});
+
+			if (!user) {
+				return res.status(404).json({ error: "User not found" });
+			}
+
+			res.json({ success: true, friends: user.friends });
+		} catch (err) {
+			console.error(err);
+			res.status(500).json({ error: "Server error" });
+		}
+	});
+
 	return router;
 };
 

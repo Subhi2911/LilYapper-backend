@@ -38,17 +38,24 @@ const chatSchema = new mongoose.Schema(
       url: { type: String, required: true, default: '/wallpapers/ChatBg.png' },
       senderbubble: { type: String, default: '#52357B' },
       receiverbubble: { type: String, default: 'white' },
-      rMesColor: {type: String, default:'black'},
-      sMesColor: {type: String, default:'white'},
-      systemMesColor: {type: String, default:'black'},
-      iColor: {type: String, default:'white'}
+      rMesColor: { type: String, default: 'black' },
+      sMesColor: { type: String, default: 'white' },
+      systemMesColor: { type: String, default: 'black' },
+      iColor: { type: String, default: 'white' }
     },
     members: [
       {
         userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
         joinedAt: { type: Date, default: Date.now }
       }
-    ]
+    ],
+    lastRead: [
+      {
+        userId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+        messageId: { type: mongoose.Schema.Types.ObjectId, ref: "Message" },
+      }
+    ],
+
 
   },
   { timestamps: true }

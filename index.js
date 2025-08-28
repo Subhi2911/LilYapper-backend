@@ -6,6 +6,7 @@ const http = require('http');
 const jwt = require('jsonwebtoken');
 const { Server } = require('socket.io');
 const Chat = require('./models/Chat');
+const { Types } = require('mongoose');
 
 const app = express();
 const port = 5000;
@@ -15,7 +16,7 @@ connectToMongo();
 
 // Middleware
 app.use(cors({
-  origin: [//'http://localhost:3000',
+  origin: ['http://localhost:3000',
     'https://lilyapper.onrender.com'
   ],
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
@@ -32,7 +33,7 @@ const server = http.createServer(app);
 // Socket.IO setup
 const io = new Server(server, {
   cors: {
-    origin: [//'http://localhost:3000',
+    origin: ['http://localhost:3000',
       'https://lilyapper.onrender.com'
     ],
     methods: ['GET', 'POST', 'PUT', 'DELETE'],
@@ -102,7 +103,7 @@ io.on('connection', (socket) => {
         newWallpaper: chat.wallpaper,
       });
       const systemMsg = {
-        id:_id,
+        id: _id,
         isSystem: true,
         content: `🖼️${username} changed the wallpaper`,
         chat: chatId,
@@ -152,13 +153,30 @@ io.on('connection', (socket) => {
     }
   });
 
-
-  socket.on('mark-read', ({ chatId }) => {
+  
+  socket.on('mark-read', async ({ chatId, messageId }) => {
     const userId = socket.user.id;
+    // Optionally save in DB (so if user refreshes, you know where they left off)
+    // 1. Try updating existing user's lastRead
+    
+    if (!Types.ObjectId.isValid(messageId)) return; 
+    const updateResult = await Chat.updateOne(
+      { _id: chatId, "lastRead.userId": userId },
+      { $set: { "lastRead.$.messageId": messageId } }
+    );
 
-    socket.to(chatId).emit('chat-read', {
+    // 2. If no document was modified, push a new entry
+    if (updateResult.matchedCount === 0) {
+      await Chat.updateOne(
+        { _id: chatId },
+        { $push: { lastRead: { userId, messageId } } }
+      );
+    }
+    // Broadcast to others in the chat
+    socket.to(chatId).emit('message-read', {
       chatId,
       userId,
+      messageId,
     });
   });
 
