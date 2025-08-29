@@ -87,7 +87,7 @@ io.on('connection', (socket) => {
 
   socket.on('change-wallpaper', async ({ _id, chatId, username, wallpaperData, chatData }) => {
     try {
-      console.log(chatId, username, wallpaperData, chatData)
+      
       // Update chat wallpaper in DB
       const chat = await Chat.findById(chatId);
       if (!chat) {
@@ -116,7 +116,7 @@ io.on('connection', (socket) => {
           io.to(userId.toString()).emit("newMessage", systemMsg);
         }
       });
-      console.log(systemMsg)
+      
 
       // Optionally send system message or any other info
     } catch (err) {
@@ -127,11 +127,11 @@ io.on('connection', (socket) => {
 
   socket.on('send-message', (message) => {
     const chat = message.chat;
-    console.log('ff ', message);
+    
 
     if (!message?.isSystem) {
       if (!chat?.users) return; // Prevent crash if no users array
-      console.log('normal')
+      
       // Normal message: send to all except sender
       const senderId = message.sender?._id;
       chat.users.forEach((user) => {
@@ -143,7 +143,7 @@ io.on('connection', (socket) => {
       });
     } else {
       if (!message?.users) return; // Prevent crash if no users array
-      console.log('system')
+      
       // System message: send to all
       message.users.forEach((user) => {
         const userId = typeof user === 'string' ? user : user._id;
