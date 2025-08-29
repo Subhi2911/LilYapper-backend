@@ -193,6 +193,7 @@ app.use('/api/auth', require('./routes/auth')(io));
 app.use('/api/chat', require('./routes/chat')(io));
 app.use('/api/message', require('./routes/message')(io));
 app.use('/api/notifications', require('./routes/notification'));
+app.use('/api/emailverification', require('./routes/emailverification'));
 
 // Route to fetch online users
 app.get('/api/online-users', (req, res) => {
