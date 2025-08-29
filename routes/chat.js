@@ -894,6 +894,79 @@ module.exports = (io) => {
         }
     });
 
+    // Route 7: Leave group
+    router.put('/group-leave/:id', fetchuser, async (req, res) => {
+        try {
+            const chat = await Chat.findById(req.params.id);
+            if (!chat) return res.status(404).json({ error: "Group not found" });
+
+            const userId = req.user.id;
+
+            // Check if user is in group
+            if (!chat.users.includes(userId)) {
+                return res.status(403).json({ error: "You are not a member of this group" });
+            }
+
+            // Remove user from `users`
+            chat.users = chat.users.filter(id => id.toString() !== userId);
+
+            // Remove from `members`
+            chat.members = chat.members.filter(m => m.userId.toString() !== userId);
+
+            const previousAdminCount = chat.groupAdmin.length;
+
+            // Remove from groupAdmin if they are admin
+            chat.groupAdmin = chat.groupAdmin.filter(adminId => adminId.toString() !== userId);
+
+            // If last admin leaves → assign a new admin
+            if (previousAdminCount === 1 && chat.groupAdmin.length === 0) {
+                if (chat.users.length > 0) {
+                    const randomIndex = Math.floor(Math.random() * chat.users.length);
+                    chat.groupAdmin = [chat.users[randomIndex]];
+                } else {
+                    chat.groupAdmin = [];
+                }
+            }
+
+            // System message for leaving
+            const user = await User.findById(userId);
+            const systemMessage = new Message({
+                sender: null,
+                content: `${user.username} left the group`,
+                isSystem: true,
+                chat: chat._id
+            });
+
+            await systemMessage.save();
+            await chat.populate('users', '_id username avatar');
+
+            const populatedSystemMessage = await Message.findById(systemMessage._id).populate({
+                path: "chat",
+                select: "isGroupChat chatName users groupAdmin",
+                populate: {
+                    path: "users",
+                    select: "username avatar"
+                }
+            });
+
+            await chat.save();
+
+            res.json({
+                message: `You left the group successfully.`,
+                isSystem: true,
+                newAdmin: chat.groupAdmin,
+                populatedSystemMessage,
+                chatId: chat._id,
+                users: chat.users,
+            });
+
+        } catch (error) {
+            console.error(error.message);
+            res.status(500).send("Internal server error");
+        }
+    });
+
+
 
 
     return router;
